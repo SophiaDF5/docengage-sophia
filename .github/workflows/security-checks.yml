@@ -153,9 +153,6 @@ jobs:
       - name: Start local Supabase
         run: supabase start
 
-      - name: Apply migrations
-        run: supabase db push
-
       - name: Run RLS gate check
         run: |
           # Get the local DB URL from supabase status
@@ -213,9 +210,6 @@ jobs:
 
       - name: Start local Supabase
         run: supabase start
-
-      - name: Apply migrations
-        run: supabase db push
 
       - name: Create test users and seed data
         run: bash scripts/create-test-users.sh
