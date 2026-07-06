@@ -13,7 +13,7 @@
 // except doc_daily_followups (cron).
 // =============================================================================
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.103.3";
 import {
   assertEquals,
   assertNotEquals,
@@ -36,7 +36,7 @@ const USER_C = { email: "test-user-c@docengage.test", password: "TestPassword789
 interface TestUser {
   id: string;
   token: string;
-  client: ReturnType<typeof createClient>;
+  client: SupabaseClient;
 }
 
 async function setupUser(creds: { email: string; password: string }): Promise<TestUser> {
