@@ -58,46 +58,6 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Normalize any LinkedIn post URL to the urn: format the Apify actor requires.
-// Handles: /posts/slug-ugcPost-XXXXXXXX, /posts/slug-activity-XXXXXXXX,
-//          /feed/update/urn:li:activity:XXXXXXXX, /feed/update/urn:li:ugcPost:XXXXXXXX
-function normalizeLinkedInUrl(raw: string): string {
-  const clean = raw.split("?")[0].replace(/\/$/, "");
-
-  // Already in urn:li:activity format
-  if (clean.includes("urn:li:activity:")) {
-    const match = clean.match(/urn:li:activity:(\d+)/);
-    if (match) return `https://www.linkedin.com/feed/update/urn:li:activity:${match[1]}/`;
-  }
-
-  // Already in urn:li:ugcPost format
-  if (clean.includes("urn:li:ugcPost:")) {
-    const match = clean.match(/urn:li:ugcPost:(\d+)/);
-    if (match) return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${match[1]}/`;
-  }
-
-  // /posts/ URL — detect content type from slug (ugcPost vs activity/share)
-  const ugcMatch = clean.match(/ugcPost-(\d{15,22})/);
-  if (ugcMatch) {
-    return `https://www.linkedin.com/feed/update/urn:li:ugcPost:${ugcMatch[1]}/`;
-  }
-
-  const activityMatch = clean.match(/(?:activity|share)-(\d{15,22})/);
-  if (activityMatch) {
-    return `https://www.linkedin.com/feed/update/urn:li:activity:${activityMatch[1]}/`;
-  }
-
-  // Fallback: extract any long numeric ID and assume activity.
-  // Allow end-of-string after the digits so IDs at the tail of the URL are captured.
-  const numMatch = clean.match(/[^0-9](\d{17,22})(?:[^0-9]|$)/);
-  if (numMatch) {
-    return `https://www.linkedin.com/feed/update/urn:li:activity:${numMatch[1]}/`;
-  }
-
-  return clean + "/";
-}
-
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -166,7 +126,7 @@ Deno.serve(async (req: Request) => {
     const runData = await runResponse.json();
     const runId = runData.data?.id;
     const datasetId = runData.data?.defaultDatasetId;
-    let initialStatus = runData.data?.status;
+    const initialStatus = runData.data?.status;
 
     console.log("Apify run started:", runId, "dataset:", datasetId, "status:", initialStatus);
 
