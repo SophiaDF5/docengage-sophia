@@ -222,6 +222,9 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Deno install
+        run: deno install
+
       - name: Run abuse tests
         run: |
           # Get local credentials
