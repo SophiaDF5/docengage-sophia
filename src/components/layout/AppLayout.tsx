@@ -7,6 +7,7 @@ import {
   Mail,
   UserCircle,
   Users,
+  Send,
   Settings,
   LogOut,
   ChevronDown,
@@ -24,6 +25,7 @@ const navItems = [
   { path: "/dm", label: "DM Assistant", icon: Mail },
   { path: "/leads", label: "Leads", icon: UserCircle },
   { path: "/contacts", label: "Contacts", icon: Users },
+  { path: "/outreach", label: "Outreach", icon: Send },
   { path: "/settings", label: "Settings", icon: Settings },
 ];
 

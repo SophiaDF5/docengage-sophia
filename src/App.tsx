@@ -9,6 +9,7 @@ import { CommentGenerator } from "./pages/CommentGenerator";
 import { DmAssistant } from "./pages/DmAssistant";
 import { Leads } from "./pages/Leads";
 import { Contacts } from "./pages/Contacts";
+import { Outreach } from "./pages/Outreach";
 import { Settings } from "./pages/Settings";
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -57,6 +58,7 @@ function AppRoutes() {
         <Route path="/dm" element={<DmAssistant />} />
         <Route path="/leads" element={<Leads />} />
         <Route path="/contacts" element={<Contacts />} />
+        <Route path="/outreach" element={<Outreach />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

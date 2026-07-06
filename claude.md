@@ -159,6 +159,9 @@ Run these commands in order. Do not skip any step.
 - src/pages/Dashboard.tsx     → Centralized queue of pending AI comments
 - src/pages/Contacts.tsx      → CRM pipeline of doctors identified
 - src/pages/Settings.tsx      → Org settings, tone samples, AI prompts
+- src/pages/DmAssistant.tsx   → AI-drafted DM replies/openers for one conversation at a time, backed by doc_dm_drafts history
+- src/pages/Leads.tsx         → Manual notes-based lead list (name/bio/links) feeding DM Assistant context, backed by doc_dm_leads
+- src/pages/Outreach.tsx      → Bulk/personalized LinkedIn outreach: pick doc_contacts or upload CSV/Excel, draft messages, assisted-send (copies message + opens LinkedIn — never sends automatically, per Out of Scope section), logs to doc_outreach_messages
 - src/components/QueueItem.tsx→ Comment review UI card with optimistic updates
 
 ### Scripts
@@ -273,6 +276,53 @@ Indexes: doc_contacts_user_id_idx, doc_contacts_org_id_idx, doc_contacts_status_
 
 Policies: doc_tone_samples_select_org, doc_tone_samples_insert_org, doc_tone_samples_update_org, doc_tone_samples_delete_org (all scoped to org membership)
 Indexes: doc_tone_samples_user_id_idx, doc_tone_samples_org_id_idx
+
+### doc_dm_leads
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | uuid | PK, default gen_random_uuid() |
+| user_id | uuid | FK → auth.users, not null, default auth.uid() |
+| org_id | uuid | FK → doc_organizations, not null |
+| name | text | not null |
+| bio | text | |
+| links | text | |
+| created_at | timestamptz | not null, default now() |
+| updated_at | timestamptz | not null, default now(), auto-trigger |
+
+Policies: doc_dm_leads_select_org, doc_dm_leads_insert_org, doc_dm_leads_update_org, doc_dm_leads_delete_org (all scoped to org membership)
+Indexes: doc_dm_leads_org_id_idx, doc_dm_leads_org_name_idx
+
+### doc_dm_drafts
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | uuid | PK, default gen_random_uuid() |
+| user_id | uuid | FK → auth.users, not null, default auth.uid() |
+| org_id | uuid | FK → doc_organizations, not null |
+| conversation_context | text | not null |
+| last_reply | text | not null |
+| generated_content | text | |
+| edited_content | text | |
+| created_at | timestamptz | not null, default now() |
+| updated_at | timestamptz | not null, default now(), auto-trigger |
+
+Policies: doc_dm_drafts_select_org, doc_dm_drafts_insert_org, doc_dm_drafts_update_org, doc_dm_drafts_delete_org (all scoped to org membership)
+Indexes: doc_dm_drafts_user_id_idx, doc_dm_drafts_org_id_idx, doc_dm_drafts_org_created_idx
+Notes: History auto-pruned to entries newer than 5 days by the DM Assistant UI on each load.
+
+### doc_outreach_messages
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | uuid | PK, default gen_random_uuid() |
+| user_id | uuid | FK → auth.users, not null, default auth.uid() |
+| org_id | uuid | FK → doc_organizations, not null |
+| contact_id | uuid | FK → doc_contacts, not null, on delete cascade |
+| message_content | text | not null |
+| sent_at | timestamptz | not null, default now() |
+| created_at | timestamptz | not null, default now() |
+
+Policies: doc_outreach_messages_select_org, doc_outreach_messages_insert_org, doc_outreach_messages_update_org, doc_outreach_messages_delete_org (all scoped to org membership)
+Indexes: doc_outreach_messages_org_id_idx, doc_outreach_messages_contact_id_idx, doc_outreach_messages_user_id_idx, doc_outreach_messages_contact_sent_idx
+Notes: Logs what was sent via the Outreach page's assisted-send flow (copy message + open LinkedIn manually). Written client-side after the user confirms they sent the message — the app never sends anything to LinkedIn itself, per the Out of Scope section.
 
 ### Storage Buckets
 - `doc_tone_uploads` (Private). Paths format: `/{org_id}/{uuid}.{ext}`
@@ -392,6 +442,34 @@ Indexes: doc_tone_samples_user_id_idx, doc_tone_samples_org_id_idx
   post is safe. Because this actor scrapes without LinkedIn login, LinkedIn can soft-block it and
   return a "successful" run with 0 items — the response includes `run_url` and a `warning` string
   so this is visible in the UI instead of silently returning zero saved leads.
+
+### doc_generate_dm
+- Method: POST
+- Rate limit tier: expensive
+- Input schema:
+  ```typescript
+  z.object({
+    org_id: z.string().uuid(),
+    my_last_reply: z.string().max(5000).optional(),
+    their_last_reply: z.string().max(3000).optional(),
+    new_topic: z.string().max(3000).optional(),
+    lead_name: z.string().max(200).optional(),
+    lead_bio: z.string().max(1000).optional(),
+    lead_links: z.string().max(500).optional(),
+  }).refine((d) => (d.my_last_reply && d.their_last_reply) || d.new_topic)
+  ```
+- Success response (200):
+  ```json
+  { "data": { "id": "uuid | null", "generated_content": "string" } }
+  ```
+- Tables touched: doc_organizations (READ, for ai_system_prompt), doc_dm_drafts (WRITE, history log)
+- External calls: OpenAI — see Section 6.5
+- Notes: Used by both the DM Assistant page (one conversation at a time) and the Outreach page's
+  personalized mode (one AI-drafted opener per selected lead, passing `lead_name`/`lead_bio` from
+  `doc_contacts` and a generic `new_topic` prompt since there's no prior conversation). Requires
+  either both reply fields (continuing a conversation) or `new_topic` (starting one). This function
+  only ever drafts text — nothing is sent to LinkedIn from here or anywhere else in the app; see
+  doc_outreach_messages and the Out of Scope section.
 
 ## External Integrations
 

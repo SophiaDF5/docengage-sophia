@@ -103,3 +103,13 @@ export interface DmDraft {
   created_at: string;
   updated_at: string;
 }
+
+export interface OutreachMessage {
+  id: string;
+  user_id: string;
+  org_id: string;
+  contact_id: string;
+  message_content: string;
+  sent_at: string;
+  created_at: string;
+}
