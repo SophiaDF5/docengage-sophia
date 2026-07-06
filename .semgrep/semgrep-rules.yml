@@ -1,0 +1,136 @@
+# =============================================================================
+# SEMGREP RULES — Supabase Security Patterns
+# =============================================================================
+# Detects security anti-patterns in Supabase projects.
+# Used in CI (github-actions.yml) and optionally locally.
+#
+# Run locally: semgrep --config .semgrep/semgrep-rules.yml src/ supabase/
+# =============================================================================
+
+rules:
+  # --- Service role key exposure ---
+
+  - id: service-role-in-client-code
+    message: >
+      service_role key detected in client/frontend code.
+      This key bypasses ALL RLS and grants full database access.
+      Use the anon key in the browser and edge functions for privileged operations.
+    severity: ERROR
+    languages: [typescript, javascript]
+    patterns:
+      - pattern-either:
+        - pattern: createClient($URL, $KEY)
+        - pattern: createClient(..., { ..., auth: { ... } })
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: .*service.?role.*
+    paths:
+      exclude:
+        - supabase/functions/**
+        - tests/**
+
+  - id: service-role-env-in-frontend
+    message: >
+      Environment variable referencing service_role found in frontend code.
+      The service_role key must NEVER be exposed to the browser.
+    severity: ERROR
+    languages: [typescript, javascript]
+    patterns:
+      - pattern-either:
+        - pattern: process.env.SUPABASE_SERVICE_ROLE_KEY
+        - pattern: import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY
+        - pattern: import.meta.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY
+    paths:
+      exclude:
+        - supabase/functions/**
+        - tests/**
+
+  # --- Identity spoofing ---
+
+  - id: user-id-from-request-body
+    message: >
+      user_id extracted from request body or query parameters.
+      User identity must ALWAYS be derived from the JWT via auth.uid() or getUser().
+      Never trust client-provided user IDs.
+    severity: ERROR
+    languages: [typescript, javascript]
+    patterns:
+      - pattern-either:
+        - pattern: $REQ.body.user_id
+        - pattern: $REQ.body.userId
+        - pattern: $BODY.user_id
+        - pattern: $BODY.userId
+        - pattern: $URL.searchParams.get("user_id")
+        - pattern: $URL.searchParams.get("userId")
+
+  # --- Unsafe database patterns ---
+
+  - id: select-star-pattern
+    message: >
+      Using select("*") may expose sensitive columns to the client.
+      Explicitly list the columns you need: select("id, name, status")
+    severity: WARNING
+    languages: [typescript, javascript]
+    pattern: $CLIENT.from($TABLE).select("*")
+    paths:
+      exclude:
+        - tests/**
+
+  - id: raw-sql-interpolation
+    message: >
+      String interpolation in SQL query detected. This may be vulnerable to SQL injection.
+      Use parameterized queries instead.
+    severity: ERROR
+    languages: [typescript, javascript]
+    patterns:
+      - pattern-either:
+        - pattern: $CLIENT.rpc($FN, `...${...}...`)
+        - pattern: $CLIENT.rpc($FN, "..." + $VAR + "...")
+
+  # --- CORS misconfiguration ---
+
+  - id: cors-wildcard
+    message: >
+      CORS wildcard (*) detected. In production, CORS must be restricted to your specific domains.
+      Use the cors.ts template with an explicit allowlist.
+    severity: ERROR
+    languages: [typescript, javascript]
+    patterns:
+      - pattern-either:
+        - pattern: |
+            "Access-Control-Allow-Origin": "*"
+        - pattern: |
+            'Access-Control-Allow-Origin': '*'
+    paths:
+      exclude:
+        - tests/**
+
+  # --- Unsafe storage patterns ---
+
+  - id: public-bucket-creation
+    message: >
+      Public storage bucket detected. All buckets must be private by default.
+      Use signed URLs for file access.
+    severity: ERROR
+    languages: [typescript, javascript]
+    pattern: createBucket($NAME, { public: true })
+
+  # --- Missing auth in edge functions ---
+
+  - id: edge-function-missing-auth
+    message: >
+      Edge function handler does not appear to call requireAuth().
+      Every edge function must verify the JWT before processing requests.
+    severity: WARNING
+    languages: [typescript, javascript]
+    patterns:
+      - pattern: Deno.serve($HANDLER)
+      - pattern-not-inside: |
+          ...
+          requireAuth(...)
+          ...
+    paths:
+      include:
+        - supabase/functions/*/index.ts
+      exclude:
+        - supabase/functions/_shared/**

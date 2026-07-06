@@ -1,0 +1,244 @@
+# =============================================================================
+# SECURITY CHECKS CI PIPELINE
+# =============================================================================
+# Runs on every PR and on push to main.
+# Blocks merge/deploy if any security gate fails.
+#
+# ADAPT: Update the Supabase project ref and secrets in your repo settings.
+# =============================================================================
+
+name: Security Gates
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+  SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+  SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # GATE 1: Static analysis — service_role leak detection
+  # ---------------------------------------------------------------------------
+  static-scan:
+    name: "Gate 1: No service_role leaks"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for service_role key outside allowed paths
+        run: |
+          echo "Scanning for service_role key usage..."
+
+          # Allowed paths: only test files and supabase functions config
+          VIOLATIONS=$(grep -rn "service_role\|SERVICE_ROLE" \
+            --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" \
+            --include="*.env*" --include="*.json" \
+            . \
+            | grep -v "node_modules" \
+            | grep -v ".git/" \
+            | grep -v "supabase/functions/" \
+            | grep -v "tests/abuse-test" \
+            | grep -v "ci/" \
+            | grep -v ".github/" \
+            | grep -v "// DO NOT" \
+            | grep -v "# DO NOT" \
+            | grep -v "NEVER" \
+            || true)
+
+          if [ -n "$VIOLATIONS" ]; then
+            echo "❌ SECURITY GATE FAILED: service_role key found in disallowed locations:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+
+          echo "✅ No service_role leaks detected."
+
+      - name: Check for hardcoded keys or secrets
+        run: |
+          echo "Scanning for hardcoded secrets..."
+
+          # Look for patterns that look like Supabase keys
+          VIOLATIONS=$(grep -rn "eyJhbGciOi\|sbp_\|supabase.*key.*=.*['\"]ey" \
+            --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" \
+            . \
+            | grep -v "node_modules" \
+            | grep -v ".git/" \
+            || true)
+
+          if [ -n "$VIOLATIONS" ]; then
+            echo "❌ SECURITY GATE FAILED: Hardcoded secrets detected:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+
+          echo "✅ No hardcoded secrets detected."
+
+  # ---------------------------------------------------------------------------
+  # GATE 2: Semgrep static analysis (deeper patterns)
+  # ---------------------------------------------------------------------------
+  semgrep:
+    name: "Gate 2: Semgrep security rules"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: returntocorp/semgrep-action@v1
+        with:
+          config: .semgrep/semgrep-rules.yml
+
+  # ---------------------------------------------------------------------------
+  # GATE 3: Edge function auth check
+  # ---------------------------------------------------------------------------
+  function-auth-check:
+    name: "Gate 3: All edge functions verify auth"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify every edge function calls requireAuth
+        run: |
+          echo "Checking edge functions for auth verification..."
+
+          FAILED=0
+          for fn_dir in supabase/functions/*/; do
+            if [ -f "$fn_dir/index.ts" ]; then
+              FN_NAME=$(basename "$fn_dir")
+
+              # Skip internal/shared directories
+              if [ "$FN_NAME" = "_shared" ]; then continue; fi
+
+              if ! grep -q "requireAuth\|requireAuthentication" "$fn_dir/index.ts"; then
+                echo "❌ Function '$FN_NAME' does NOT call requireAuth()"
+                FAILED=1
+              fi
+
+              if ! grep -q "rateLimit" "$fn_dir/index.ts"; then
+                echo "❌ Function '$FN_NAME' does NOT call rateLimit()"
+                FAILED=1
+              fi
+
+              if ! grep -q "validateBody\|validateParams" "$fn_dir/index.ts"; then
+                echo "⚠️  Function '$FN_NAME' does not validate input (warning)"
+              fi
+            fi
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo "❌ SECURITY GATE FAILED: Some functions missing auth/rate-limit."
+            exit 1
+          fi
+
+          echo "✅ All edge functions have auth + rate limiting."
+
+  # ---------------------------------------------------------------------------
+  # GATE 4: RLS + policy verification against scratch DB
+  # ---------------------------------------------------------------------------
+  rls-check:
+    name: "Gate 4: RLS enabled + policies scoped"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase
+        run: |
+          supabase init --force
+          supabase start
+
+      - name: Apply migrations
+        run: supabase db push
+
+      - name: Run RLS gate check
+        run: |
+          # Get the local DB URL from supabase status
+          DB_URL=$(supabase status -o json | jq -r '.DB_URL')
+          psql "$DB_URL" -f sql/rls-gate-check.sql --set ON_ERROR_STOP=1
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop
+
+  # ---------------------------------------------------------------------------
+  # GATE 5: Storage bucket check
+  # ---------------------------------------------------------------------------
+  storage-check:
+    name: "Gate 5: No public buckets"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for public bucket declarations
+        run: |
+          echo "Scanning for public bucket declarations..."
+
+          # Check migration files for public: true on buckets
+          VIOLATIONS=$(grep -rn "public.*true\|'public',\s*true" \
+            --include="*.sql" \
+            supabase/migrations/ \
+            | grep -i "bucket" \
+            || true)
+
+          if [ -n "$VIOLATIONS" ]; then
+            echo "❌ SECURITY GATE FAILED: Public storage buckets detected:"
+            echo "$VIOLATIONS"
+            echo ""
+            echo "All buckets must be private. Use signed URLs for access."
+            exit 1
+          fi
+
+          echo "✅ No public buckets detected."
+
+  # ---------------------------------------------------------------------------
+  # GATE 6: Dynamic abuse tests
+  # ---------------------------------------------------------------------------
+  abuse-tests:
+    name: "Gate 6: Cross-user abuse tests"
+    runs-on: ubuntu-latest
+    needs: [rls-check]  # Run after RLS check passes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase
+        run: |
+          supabase init --force
+          supabase start
+
+      - name: Apply migrations
+        run: supabase db push
+
+      - name: Deploy edge functions locally
+        run: supabase functions serve &
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
+      - name: Run abuse tests
+        run: |
+          # Get local credentials
+          LOCAL_URL=$(supabase status -o json | jq -r '.API_URL')
+          ANON_KEY=$(supabase status -o json | jq -r '.ANON_KEY')
+          SERVICE_KEY=$(supabase status -o json | jq -r '.SERVICE_ROLE_KEY')
+
+          SUPABASE_URL="$LOCAL_URL" \
+          SUPABASE_ANON_KEY="$ANON_KEY" \
+          SUPABASE_SERVICE_ROLE_KEY="$SERVICE_KEY" \
+            deno test --allow-net --allow-env tests/abuse-test.ts
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop
