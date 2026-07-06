@@ -48,6 +48,8 @@ jobs:
             | grep -v "// DO NOT" \
             | grep -v "# DO NOT" \
             | grep -v "NEVER" \
+            | grep -v "\.env\.example:" \
+            | grep -v "\.env\.test\.example:" \
             || true)
 
           if [ -n "$VIOLATIONS" ]; then
@@ -149,9 +151,7 @@ jobs:
           version: latest
 
       - name: Start local Supabase
-        run: |
-          supabase init --force
-          supabase start
+        run: supabase start
 
       - name: Apply migrations
         run: supabase db push
@@ -212,12 +212,13 @@ jobs:
           version: latest
 
       - name: Start local Supabase
-        run: |
-          supabase init --force
-          supabase start
+        run: supabase start
 
       - name: Apply migrations
         run: supabase db push
+
+      - name: Create test users and seed data
+        run: bash scripts/create-test-users.sh
 
       - name: Deploy edge functions locally
         run: supabase functions serve &
