@@ -113,17 +113,23 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- CHECK 5: Every doc_ table must have all four CRUD policies present
+-- CHECK 5: Every doc_ table must have all four CRUD policies present, except
+-- tables that are intentionally insert-only. doc_rate_limits revokes all
+-- privileges and grants INSERT only (see migration 001) — this is deliberate:
+-- letting users SELECT/UPDATE/DELETE their own rate-limit rows would let them
+-- see or erase their own throttling history and bypass rate limiting.
 -- ---------------------------------------------------------------------------
 do $$
 declare
   rec record;
   missing text := '';
   cmd_count int;
+  insert_only_tables text[] := array['doc_rate_limits'];
 begin
   for rec in
     select tablename from pg_tables
     where schemaname = 'public' and tablename like 'doc_%'
+      and tablename != all(insert_only_tables)
   loop
     select count(distinct cmd) into cmd_count
     from pg_policies
@@ -139,7 +145,7 @@ begin
     raise exception 'RLS GATE FAILED: tables missing full CRUD policy coverage: %', missing;
   end if;
 
-  raise notice 'CHECK 5 PASSED: every doc_ table has SELECT/INSERT/UPDATE/DELETE policies.';
+  raise notice 'CHECK 5 PASSED: every doc_ table has full CRUD coverage (except documented insert-only tables).';
 end $$;
 
 select 'ALL RLS GATE CHECKS PASSED.' as result;
