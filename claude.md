@@ -50,7 +50,12 @@ Run these commands in order. Do not skip any step.
 ## Rules
 
 1. NEVER use the service_role key in application code. It exists only in
-   test scripts and isolated admin functions (like `doc_daily_followups`).
+   test scripts and isolated admin functions with no user JWT to key RLS off
+   of — currently `doc_daily_followups` (cron) and `doc_inbound_post`
+   (Make.com webhook, authenticated via MAKE_WEBHOOK_SECRET instead of a
+   session). Any new function added to this list must have the same property:
+   a trusted, non-interactive caller with no user session, not just "it was
+   convenient."
 
 2. NEVER accept user_id from request bodies, query parameters, headers,
    or any client-provided source. User identity is ALWAYS derived from the
@@ -339,7 +344,8 @@ Notes: Logs what was sent via the Outreach page's assisted-send flow (copy messa
   z.object({
     org_id: z.string().uuid(),
     linkedin_post_url: z.string().url(),
-    author_name: z.string(),
+    author_name: z.string().optional(),
+    author_headline: z.string().optional(),
     content: z.string(),
     secret_token: z.string()
   })
@@ -354,8 +360,17 @@ Notes: Logs what was sent via the Outreach page's assisted-send flow (copy messa
   - 429: Rate limit exceeded
   - 500: Sanitized message
 - Tables touched: doc_posts (WRITE), doc_comments (WRITE), doc_organizations (READ)
-- External calls: OpenAI — see Section 6.5
-- Notes: Validates `secret_token` against `MAKE_WEBHOOK_SECRET` via constant-time comparison. Extracts author info to construct AI prompt. Checks `auto_post_enabled` in `doc_organizations`. If true, bypasses manual queue (status='approved') and triggers outbound Make webhook. Idempotent: Skips generation if `linkedin_post_url` exists. If OpenAI fails, inserts post but leaves comment blank with `generation_failed` status.
+- External calls: OpenAI — see Section 6.5; Make.com — see Section 6.5 (only when `auto_post_enabled` is true)
+- Notes: No user JWT exists for this call (Make.com is the caller, not a logged-in user), so it uses the
+  service_role client — see the exception carved out in Rule 1. Validates `secret_token` against
+  `MAKE_WEBHOOK_SECRET` via constant-time comparison (`constantTimeEqual`) — checked here, not via
+  `requireAuth()`, which is why Gate 3 in CI has a documented exemption for this function specifically.
+  Rate-limited against the org owner's user_id (there's no calling user to key on directly). Defaults
+  `author_name` to "Author" when missing. Idempotent: returns the existing post/status instead of
+  regenerating if `linkedin_post_url` already exists for this org. If OpenAI fails, inserts the post but
+  marks the comment `generation_failed` instead of blocking ingestion. If `auto_post_enabled` is true,
+  attempts the outbound Make.com webhook immediately; on any failure (or if Make.com isn't configured),
+  falls back to `pending` so a human can review/retry rather than silently claiming it posted.
 
 ### doc_approve_comment
 - Method: POST

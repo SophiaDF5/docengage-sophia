@@ -40,7 +40,7 @@ interface TestUser {
 }
 
 async function setupUser(creds: { email: string; password: string }): Promise<TestUser> {
-  const { data: authData, error: createError } = await admin.auth.admin.createUser({
+  const { error: createError } = await admin.auth.admin.createUser({
     email: creds.email,
     password: creds.password,
     email_confirm: true,
@@ -73,7 +73,6 @@ let postA_id: string;
 let postB_id: string;
 let commentA_id: string;
 let commentB_id: string;
-let contactA_id: string;
 let contactB_id: string;
 
 async function cleanup() {
@@ -110,55 +109,63 @@ Deno.test({
     assertNotEquals(userA.id, userC.id);
 
     // Create orgs via service role (bypasses RLS for test setup)
-    const { data: oA } = await admin.from("doc_organizations")
+    const { data: oA, error: oAError } = await admin.from("doc_organizations")
       .insert({ user_id: userA.id, name: "Test Org A" })
       .select("id").single();
-    orgA_id = oA!.id;
+    if (oAError || !oA) throw new Error(`Failed to create Test Org A: ${oAError?.message}`);
+    orgA_id = oA.id;
 
-    const { data: oB } = await admin.from("doc_organizations")
+    const { data: oB, error: oBError } = await admin.from("doc_organizations")
       .insert({ user_id: userB.id, name: "Test Org B" })
       .select("id").single();
-    orgB_id = oB!.id;
+    if (oBError || !oB) throw new Error(`Failed to create Test Org B: ${oBError?.message}`);
+    orgB_id = oB.id;
 
     // Create memberships
-    await admin.from("doc_organization_members").insert([
+    const { error: memberError } = await admin.from("doc_organization_members").insert([
       { user_id: userA.id, org_id: orgA_id, role: "owner" },
       { user_id: userB.id, org_id: orgB_id, role: "owner" },
       { user_id: userC.id, org_id: orgA_id, role: "member" }, // C is member of A's org
     ]);
+    if (memberError) throw new Error(`Failed to create memberships: ${memberError.message}`);
 
     // Create posts
-    const { data: pA } = await admin.from("doc_posts")
+    const { data: pA, error: pAError } = await admin.from("doc_posts")
       .insert({ user_id: userA.id, org_id: orgA_id, linkedin_post_url: "https://linkedin.com/test/a1", author_name: "Dr. TestA" })
       .select("id").single();
-    postA_id = pA!.id;
+    if (pAError || !pA) throw new Error(`Failed to create post A: ${pAError?.message}`);
+    postA_id = pA.id;
 
-    const { data: pB } = await admin.from("doc_posts")
+    const { data: pB, error: pBError } = await admin.from("doc_posts")
       .insert({ user_id: userB.id, org_id: orgB_id, linkedin_post_url: "https://linkedin.com/test/b1", author_name: "Dr. TestB" })
       .select("id").single();
-    postB_id = pB!.id;
+    if (pBError || !pB) throw new Error(`Failed to create post B: ${pBError?.message}`);
+    postB_id = pB.id;
 
     // Create pending comments
-    const { data: cA } = await admin.from("doc_comments")
+    const { data: cA, error: cAError } = await admin.from("doc_comments")
       .insert({ user_id: userA.id, post_id: postA_id, org_id: orgA_id, generated_content: "Test comment A", status: "pending" })
       .select("id").single();
-    commentA_id = cA!.id;
+    if (cAError || !cA) throw new Error(`Failed to create comment A: ${cAError?.message}`);
+    commentA_id = cA.id;
 
-    const { data: cB } = await admin.from("doc_comments")
+    const { data: cB, error: cBError } = await admin.from("doc_comments")
       .insert({ user_id: userB.id, post_id: postB_id, org_id: orgB_id, generated_content: "Test comment B", status: "pending" })
       .select("id").single();
-    commentB_id = cB!.id;
+    if (cBError || !cB) throw new Error(`Failed to create comment B: ${cBError?.message}`);
+    commentB_id = cB.id;
 
     // Create contacts
-    const { data: kA } = await admin.from("doc_contacts")
+    const { data: kA, error: kAError } = await admin.from("doc_contacts")
       .insert({ user_id: userA.id, org_id: orgA_id, linkedin_profile_url: "https://linkedin.com/in/test-a", full_name: "Dr. Contact A" })
       .select("id").single();
-    contactA_id = kA!.id;
+    if (kAError || !kA) throw new Error(`Failed to create contact A: ${kAError?.message}`);
 
-    const { data: kB } = await admin.from("doc_contacts")
+    const { data: kB, error: kBError } = await admin.from("doc_contacts")
       .insert({ user_id: userB.id, org_id: orgB_id, linkedin_profile_url: "https://linkedin.com/in/test-b", full_name: "Dr. Contact B" })
       .select("id").single();
-    contactB_id = kB!.id;
+    if (kBError || !kB) throw new Error(`Failed to create contact B: ${kBError?.message}`);
+    contactB_id = kB.id;
   },
   sanitizeOps: false,
   sanitizeResources: false,

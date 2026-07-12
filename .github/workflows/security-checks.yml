@@ -105,6 +105,12 @@ jobs:
         run: |
           echo "Checking edge functions for auth verification..."
 
+          # Functions authenticated by a shared secret (Make.com webhooks) instead
+          # of a user JWT — requireAuth() legitimately does not apply to these.
+          # Any function added here must be verified to check its own secret
+          # via a constant-time comparison (see doc_inbound_post).
+          WEBHOOK_AUTH_EXEMPT="doc_inbound_post"
+
           FAILED=0
           for fn_dir in supabase/functions/*/; do
             if [ -f "$fn_dir/index.ts" ]; then
@@ -113,7 +119,12 @@ jobs:
               # Skip internal/shared directories
               if [ "$FN_NAME" = "_shared" ]; then continue; fi
 
-              if ! grep -q "requireAuth\|requireAuthentication" "$fn_dir/index.ts"; then
+              if echo "$WEBHOOK_AUTH_EXEMPT" | grep -qw "$FN_NAME"; then
+                if ! grep -q "constantTimeEqual\|constantTimeCompare" "$fn_dir/index.ts"; then
+                  echo "❌ Function '$FN_NAME' is webhook-auth-exempt but doesn't verify its secret with a constant-time comparison"
+                  FAILED=1
+                fi
+              elif ! grep -q "requireAuth\|requireAuthentication" "$fn_dir/index.ts"; then
                 echo "❌ Function '$FN_NAME' does NOT call requireAuth()"
                 FAILED=1
               fi
