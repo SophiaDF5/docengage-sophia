@@ -3,7 +3,7 @@
 
 Prefix: doc_
 Architecture type: Dashboard
-Single-user: no
+Single-user: yes, per login — every account is its own fully isolated workspace (see "Account model" below). There is no team/multi-user sharing; a new signup starts completely empty.
 Security templates repo: https://github.com/atibadesouza/Security-Repo
 
 ## Setup
@@ -47,6 +47,34 @@ Run these commands in order. Do not skip any step.
    supabase secrets set MAKE_WEBHOOK_SECRET="your_make_secret"
    supabase secrets set OPENAI_API_KEY="your_openai_key"
 
+## Account model
+
+There is no team/organization concept — every login is its own fully isolated account.
+A brand new signup starts completely empty; nothing is ever shared between logins.
+
+Under the hood, `doc_organizations` still exists as a table (kept for historical/low-risk
+reasons — see migration 012) and every other table still carries an `org_id` column, but it
+is now purely an internal per-account identifier:
+
+- Every user gets exactly one `doc_organizations` row, auto-created by the
+  `doc_on_auth_user_created` trigger the moment they sign up (no manual SQL setup needed
+  for new accounts anymore).
+- `doc_user_org_ids()` — the function every table's RLS policy calls — was redefined in
+  migration 012 to return only the caller's own account row instead of "every org I'm a
+  member of." This means every existing table's policy automatically enforces per-account
+  isolation with zero per-table changes.
+- `doc_organization_members` (the old team/roles table) is dropped. There are no roles
+  (owner/admin/member) anymore — every account is simply its own owner.
+- The frontend never shows an org switcher, never lets you invite a teammate, and never
+  asks you to pick a workspace. `useOrganization()` just resolves to "your account."
+
+If you're adding a new table, follow the same pattern as every existing one: `org_id`
+column + RLS policies scoped through `doc_user_org_ids()`. Don't scope directly off
+`user_id` in new policies (except the three documented owner-only policies on
+`doc_organizations` itself) — keeping every table routed through the one function is what
+made this refactor a single migration instead of touching every policy individually, and
+it means a future access-model change (if one is ever needed again) stays just as cheap.
+
 ## Rules
 
 1. NEVER use the service_role key in application code. It exists only in
@@ -62,8 +90,10 @@ Run these commands in order. Do not skip any step.
    JWT via auth.uid() (database) or requireAuth() (edge functions).
 
 3. NEVER create a table without enabling RLS and adding all four policies
-   (SELECT, INSERT, UPDATE, DELETE) scoped to org membership via
-   doc_user_org_ids(). INSERT policies must also enforce user_id = auth.uid().
+   (SELECT, INSERT, UPDATE, DELETE) scoped via doc_user_org_ids() — which,
+   since migration 012, resolves to "my own account row," not "orgs I'm a
+   member of." See "Account model" below. INSERT policies must also enforce
+   user_id = auth.uid().
 
 4. NEVER create an edge function without the full middleware chain:
    handlePreflight → requireAuth → rateLimit → validateBody →
@@ -154,6 +184,7 @@ Run these commands in order. Do not skip any step.
 - supabase/migrations/009_outreach_messages.sql → Creates doc_outreach_messages
 - supabase/migrations/010_unify_lead_sources.sql → Adds `source` to doc_contacts; adds `status`/`linkedin_profile_url`/`last_contacted_at` to doc_dm_leads; makes doc_outreach_messages.contact_id nullable and adds dm_lead_id, so a lead from either table can flow through the unified Outreach queue
 - supabase/migrations/011_add_custom_fields.sql → Adds `custom_fields` jsonb column to doc_contacts and doc_dm_leads for freeform per-lead info (title, company, etc.), no fixed schema
+- supabase/migrations/012_remove_org_teams.sql → Collapses the org/team model into one isolated account per login: auto-creates a doc_organizations row per user via a new auth.users trigger, redefines doc_user_org_ids() to return only the caller's own row, drops doc_organization_members + doc_user_is_org_admin(). See "Account model" above.
 
 ### Deployment
 - docs/deployment/MANUAL_SQL_OPERATIONS.md  → Manual SQL that must be run
@@ -163,21 +194,23 @@ Run these commands in order. Do not skip any step.
 - supabase/functions/doc_inbound_post/index.ts    → Receives post from Make, triggers OpenAI, saves to DB
 - supabase/functions/doc_approve_comment/index.ts → Approves comment, triggers Make webhook to post
 - supabase/functions/doc_process_tone/index.ts    → Processes media via Whisper, updates org system prompt
-- supabase/functions/doc_daily_followups/index.ts → Cron job pushing stale contacts to Make.com
-- supabase/functions/doc_invite_member/index.ts  → Invites user to org (admin/owner only, uses service_role)
+- supabase/functions/doc_daily_followups/index.ts → Documented but not yet built — no directory exists in the repo. Skip when deploying; there's nothing to deploy yet.
 - supabase/functions/doc_scrape_post_commenters/index.ts → Lead scraper: pulls LinkedIn post commenters via Apify (HarvestAPI actor), filters for healthcare keywords, upserts doc_contacts
 - supabase/functions/doc_enrich_emails/index.ts → Attempts to find emails for existing doc_contacts via a second Apify actor (HarvestAPI profile+email search) — partial coverage only, not guaranteed per lead
 - supabase/functions/doc_enrich_emails_apollo/index.ts → Second-attempt email finder via Apollo.io People Enrichment API — deliberately separate button/cap (max 20) from doc_enrich_emails since Apollo credits are much scarcer
+- supabase/functions/doc_generate_comment/index.ts → Drafts the AI comment for a post (used by doc_inbound_post and manual regeneration from the Comments dashboard); reads doc_organizations.ai_system_prompt for tone
+- supabase/functions/doc_generate_dm/index.ts → Drafts DM replies/openers for DM Assistant and Outreach's personalized mode; reads doc_organizations.ai_system_prompt for tone
 
 ### Frontend
 - src/pages/Dashboard.tsx     → Centralized queue of pending AI comments
 - src/pages/Contacts.tsx      → "Scraped Leads" page. CRM pipeline of doctors identified via the scraper only (`source = 'scraped'`). Manually added leads live on the Manual Added Leads page instead, though both read/write the same doc_contacts table and `["contacts", orgId]` query key. Select leads without an email (max 50) to run doc_enrich_emails, or (max 20) to run doc_enrich_emails_apollo as a second attempt; export filtered view to CSV
 - src/pages/ManualLeads.tsx   → "Manual Added Leads" page. Shows doc_contacts rows where `source = 'manual'` — added one-by-one via AddContactDialog, or via CSV/Excel upload on the Outreach page. Supports status changes, delete, and the same email-enrichment (Find Emails) flow as Scraped Leads. Shares the `["contacts", orgId]` query key so status stays in sync with Scraped Leads and Outreach.
-- src/pages/Settings.tsx      → Org settings, tone samples, AI prompts
+- src/pages/Settings.tsx      → Account settings (name, AI tone/system prompt), tone sample uploads. No team/member management — see "Account model" above.
 - src/pages/DmAssistant.tsx   → AI-drafted DM replies/openers for one conversation at a time, backed by doc_dm_drafts history
 - src/pages/Leads.tsx         → "Engaged Leads" page. Manually curated lead list (name/bio/LinkedIn URL) feeding DM Assistant context, backed by doc_dm_leads. Has its own status pipeline (pending/messaged/engaged) matching doc_contacts
 - src/pages/Outreach.tsx      → Unified outreach queue merging doc_contacts (scraped + manual) and doc_dm_leads (engaged) into one list, with Scraped/Engaged/Manual Added filter chips. Upload CSV/Excel (rows land in doc_contacts tagged `source = 'manual'`), draft messages (bulk or AI-personalized), assisted-send (copies message + opens LinkedIn — never sends automatically, per Out of Scope section). Logs to doc_outreach_messages against whichever source table (`contact_id` or `dm_lead_id`) the lead came from, and writes status back to that same table — see "Status sync" note under doc_outreach_messages below
 - src/components/AddContactDialog.tsx → Shared "Add Lead" dialog (name/LinkedIn URL/headline), inserts into doc_contacts with `source = 'manual'`. Currently only used by the Manual Added Leads page — kept as its own component so the insert shape can't drift if it's ever wired into another page too.
+- src/components/CustomFieldsDialog.tsx → Shared dialog for adding freeform key/value info to a lead (job title, company, etc. — see doc_contacts.custom_fields / doc_dm_leads.custom_fields, migration 011). Used on Scraped Leads, Manual Added Leads, and Engaged Leads. Takes `table` ("doc_contacts" | "doc_dm_leads") + `queryKey` so it invalidates whichever page's cache owns the row.
 - src/components/ErrorBoundary.tsx → Top-level React error boundary wrapping the router in App.tsx. Without it, any uncaught render error (bad query, null dereference, a bug in a new page) unmounts the whole tree and leaves a blank white screen with no message — this catches it and shows a real error + reload option instead.
 - src/components/QueueItem.tsx→ Comment review UI card with optimistic updates
 
@@ -185,7 +218,7 @@ Run these commands in order. Do not skip any step.
 - scripts/setup-integrations.md → Step-by-step credential setup for external integrations
 
 ### Tests
-- tests/abuse-test.ts → Cross-user security tests
+- tests/abuse-test.ts → Cross-account security tests (User A cannot see/modify User B's data)
 
 ### CI
 - .github/workflows/security-checks.yml → Security gates
@@ -202,31 +235,26 @@ Run these commands in order. Do not skip any step.
 | created_at | timestamptz | not null, default now() |
 
 ### doc_organizations
+One row per user — an internal per-account settings container, not a user-facing
+"organization." Auto-created by the `doc_on_auth_user_created` trigger on signup (migration
+012). See "Account model" above.
+
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | uuid | PK, default gen_random_uuid() |
-| user_id | uuid | FK → auth.users, not null, default auth.uid() |
+| user_id | uuid | FK → auth.users, not null, default auth.uid(), effectively unique (one row per user going forward) |
 | name | text | not null |
 | auto_post_enabled | boolean | not null, default false |
 | ai_system_prompt | text | |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
-Policies: doc_organizations_select_member (org membership), doc_organizations_insert_auth (creator), doc_organizations_update_owner (owner only), doc_organizations_delete_owner (owner only)
+Policies: doc_organizations_select_member (resolves to "my own row" — see doc_user_org_ids()), doc_organizations_insert_auth (creator), doc_organizations_update_owner (owner only), doc_organizations_delete_owner (owner only)
 Indexes: doc_organizations_user_id_idx
 
-### doc_organization_members
-| Column | Type | Constraints |
-|--------|------|-------------|
-| id | uuid | PK, default gen_random_uuid() |
-| user_id | uuid | FK → auth.users, not null, default auth.uid() |
-| org_id | uuid | FK → doc_organizations, not null |
-| role | text | not null, default 'member', check in ('owner', 'admin', 'member') |
-| created_at | timestamptz | not null, default now() |
-| updated_at | timestamptz | not null, default now(), auto-trigger |
-
-Policies: doc_organization_members_select_org (see members of your orgs), doc_organization_members_insert_admin (owner/admin only), doc_organization_members_update_admin (owner/admin only), doc_organization_members_delete_admin (owner/admin only)
-Indexes: doc_organization_members_user_id_idx, doc_organization_members_org_id_idx
+**doc_organization_members was dropped in migration 012** along with the team/roles concept
+(owner/admin/member). There is no equivalent table anymore — don't recreate it without a
+real product reason to bring back multi-user sharing.
 
 ### doc_posts
 | Column | Type | Constraints |
@@ -242,7 +270,7 @@ Indexes: doc_organization_members_user_id_idx, doc_organization_members_org_id_i
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
-Policies: doc_posts_select_org, doc_posts_insert_org, doc_posts_update_org, doc_posts_delete_org (all scoped to org membership)
+Policies: doc_posts_select_org, doc_posts_insert_org, doc_posts_update_org, doc_posts_delete_org (all scoped to your own account via doc_user_org_ids())
 Indexes: doc_posts_user_id_idx, doc_posts_org_id_idx
 
 ### doc_comments
@@ -259,7 +287,7 @@ Indexes: doc_posts_user_id_idx, doc_posts_org_id_idx
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
-Policies: doc_comments_select_org, doc_comments_insert_org, doc_comments_update_org, doc_comments_delete_org (all scoped to org membership)
+Policies: doc_comments_select_org, doc_comments_insert_org, doc_comments_update_org, doc_comments_delete_org (all scoped to your own account via doc_user_org_ids())
 Indexes: doc_comments_user_id_idx, doc_comments_post_id_idx, doc_comments_org_id_idx, doc_comments_status_idx, doc_comments_org_status_idx
 Realtime: Enabled ONLY for `status` column
 
@@ -284,7 +312,7 @@ imported via the Outreach page's CSV/Excel upload (also tagged `source = 'manual
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
-Policies: doc_contacts_select_org, doc_contacts_insert_org, doc_contacts_update_org, doc_contacts_delete_org (all scoped to org membership)
+Policies: doc_contacts_select_org, doc_contacts_insert_org, doc_contacts_update_org, doc_contacts_delete_org (all scoped to your own account via doc_user_org_ids())
 Indexes: doc_contacts_user_id_idx, doc_contacts_org_id_idx, doc_contacts_status_idx, doc_contacts_org_status_idx, doc_contacts_source_idx
 
 ### doc_tone_samples
@@ -299,7 +327,7 @@ Indexes: doc_contacts_user_id_idx, doc_contacts_org_id_idx, doc_contacts_status_
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
-Policies: doc_tone_samples_select_org, doc_tone_samples_insert_org, doc_tone_samples_update_org, doc_tone_samples_delete_org (all scoped to org membership)
+Policies: doc_tone_samples_select_org, doc_tone_samples_insert_org, doc_tone_samples_update_org, doc_tone_samples_delete_org (all scoped to your own account via doc_user_org_ids())
 Indexes: doc_tone_samples_user_id_idx, doc_tone_samples_org_id_idx
 
 ### doc_dm_leads
@@ -322,7 +350,7 @@ into the Outreach queue.
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
-Policies: doc_dm_leads_select_org, doc_dm_leads_insert_org, doc_dm_leads_update_org, doc_dm_leads_delete_org (all scoped to org membership)
+Policies: doc_dm_leads_select_org, doc_dm_leads_insert_org, doc_dm_leads_update_org, doc_dm_leads_delete_org (all scoped to your own account via doc_user_org_ids())
 Indexes: doc_dm_leads_org_id_idx, doc_dm_leads_org_name_idx, doc_dm_leads_status_idx, doc_dm_leads_org_status_idx
 
 ### doc_dm_drafts
@@ -338,7 +366,7 @@ Indexes: doc_dm_leads_org_id_idx, doc_dm_leads_org_name_idx, doc_dm_leads_status
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
-Policies: doc_dm_drafts_select_org, doc_dm_drafts_insert_org, doc_dm_drafts_update_org, doc_dm_drafts_delete_org (all scoped to org membership)
+Policies: doc_dm_drafts_select_org, doc_dm_drafts_insert_org, doc_dm_drafts_update_org, doc_dm_drafts_delete_org (all scoped to your own account via doc_user_org_ids())
 Indexes: doc_dm_drafts_user_id_idx, doc_dm_drafts_org_id_idx, doc_dm_drafts_org_created_idx
 Notes: History auto-pruned to entries newer than 5 days by the DM Assistant UI on each load.
 
@@ -355,7 +383,7 @@ Notes: History auto-pruned to entries newer than 5 days by the DM Assistant UI o
 | created_at | timestamptz | not null, default now() |
 
 Constraint: `doc_outreach_messages_exactly_one_target` — exactly one of `contact_id` / `dm_lead_id` must be set (never both, never neither), since migration 010 lets a logged message point at either source table.
-Policies: doc_outreach_messages_select_org, doc_outreach_messages_insert_org, doc_outreach_messages_update_org, doc_outreach_messages_delete_org (all scoped to org membership)
+Policies: doc_outreach_messages_select_org, doc_outreach_messages_insert_org, doc_outreach_messages_update_org, doc_outreach_messages_delete_org (all scoped to your own account via doc_user_org_ids())
 Indexes: doc_outreach_messages_org_id_idx, doc_outreach_messages_contact_id_idx, doc_outreach_messages_user_id_idx, doc_outreach_messages_contact_sent_idx, doc_outreach_messages_dm_lead_id_idx
 Notes: Logs what was sent via the Outreach page's assisted-send flow (copy message + open LinkedIn manually). Written client-side after the user confirms they sent the message — the app never sends anything to LinkedIn itself, per the Out of Scope section.
 
@@ -816,6 +844,11 @@ if (response.status >= 500) {
 ## Patterns
 
 ### New table migration
+Every real table in this codebase is scoped through `org_id` + `doc_user_org_ids()`, not a
+direct `user_id = auth.uid()` check (see "Account model" above for why — it keeps every
+table's access rule routed through one single, auditable function instead of duplicating
+the check everywhere). Follow this exact shape for any new table:
+
 ```sql
 create table if not exists public.doc_example (
   id uuid primary key default gen_random_uuid(),
@@ -828,10 +861,15 @@ create table if not exists public.doc_example (
 
 alter table public.doc_example enable row level security;
 
-create policy "doc_example_select_own" on public.doc_example for select using (user_id = auth.uid());
-create policy "doc_example_insert_own" on public.doc_example for insert with check (user_id = auth.uid());
-create policy "doc_example_update_own" on public.doc_example for update using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "doc_example_delete_own" on public.doc_example for delete using (user_id = auth.uid());
+create policy "doc_example_select_org" on public.doc_example for select
+  using (org_id in (select public.doc_user_org_ids()));
+create policy "doc_example_insert_org" on public.doc_example for insert
+  with check (user_id = auth.uid() and org_id in (select public.doc_user_org_ids()));
+create policy "doc_example_update_org" on public.doc_example for update
+  using (org_id in (select public.doc_user_org_ids()))
+  with check (org_id in (select public.doc_user_org_ids()));
+create policy "doc_example_delete_org" on public.doc_example for delete
+  using (org_id in (select public.doc_user_org_ids()));
 
 create index if not exists doc_example_user_id_idx on public.doc_example(user_id);
 create index if not exists doc_example_org_id_idx on public.doc_example(org_id);
@@ -958,9 +996,9 @@ The base abuse test from security templates covers:
 
 ### Project-specific tests to ADD:
 For each user-data table:
-- User A (Org 1) cannot SELECT `doc_posts` belonging to Org 2.
-- User A cannot UPDATE a comment ID belonging to Org 2.
-- User A cannot trigger `doc_process_tone` for a `sample_id` outside their org.
+- User A cannot SELECT `doc_posts` belonging to User B.
+- User A cannot UPDATE a comment ID belonging to User B.
+- User A cannot trigger `doc_process_tone` for a `sample_id` outside their own account.
 
 For each edge function:
 - `doc_approve_comment` rejects missing JWT (→ 401).
@@ -970,7 +1008,7 @@ For each edge function:
 
 Business logic tests:
 - Double-Approval Replay: Submitting `doc_approve_comment` twice for the same `comment_id` must only trigger the Make.com webhook ONCE. Function must check `status = 'pending'` before proceeding.
-- Privilege Escalation: A user with role `member` cannot change the `auto_post_enabled` boolean in `doc_organizations`.
+- Account isolation: User A cannot change User B's `auto_post_enabled` boolean in `doc_organizations` (no roles exist anymore — every account is simply its own owner, see "Account model" above).
 
 ### Running tests locally
 ```bash

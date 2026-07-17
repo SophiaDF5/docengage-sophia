@@ -1,6 +1,5 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
-import { useOrganization } from "../../hooks/useOrganization";
 import { Button } from "../ui/button";
 import {
   MessageSquare,
@@ -11,14 +10,7 @@ import {
   Send,
   Settings,
   LogOut,
-  ChevronDown,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
 import { cn } from "../../lib/utils";
 
 const navItems = [
@@ -33,7 +25,6 @@ const navItems = [
 
 export function AppLayout() {
   const { user, signOut } = useAuth();
-  const { organizations, currentOrg, setCurrentOrgId } = useOrganization();
   const location = useLocation();
 
   return (
@@ -66,27 +57,6 @@ export function AppLayout() {
           </nav>
 
           <div className="ml-auto flex items-center gap-3">
-            {organizations.length > 1 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={<Button variant="outline" size="sm" className="gap-2" />}
-                >
-                  {currentOrg?.name ?? "Select Org"}
-                  <ChevronDown className="h-3 w-3" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {organizations.map((org) => (
-                    <DropdownMenuItem
-                      key={org.id}
-                      onClick={() => setCurrentOrgId(org.id)}
-                    >
-                      {org.name}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-
             <span className="text-sm text-muted-foreground">
               {user?.email}
             </span>

@@ -34,8 +34,12 @@ end $$;
 
 -- ---------------------------------------------------------------------------
 -- CHECK 2: No policy may reference user_id = auth.uid() directly, except the
--- explicitly owner-scoped policies on doc_organizations (creation/ownership
--- transfer is intentionally tied to the creating user, not org membership).
+-- explicitly owner-scoped policies on doc_organizations (creation/deletion
+-- of your own account row). Every other table stays routed through
+-- doc_user_org_ids() even after migration 012 (which redefined that
+-- function to mean "my own account" instead of "orgs I'm a member of") —
+-- this keeps every table's policy going through one single, auditable
+-- choke point instead of duplicating `user_id = auth.uid()` everywhere.
 -- ---------------------------------------------------------------------------
 do $$
 declare

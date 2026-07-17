@@ -1,18 +1,14 @@
+// Table name kept as "doc_organizations" for historical reasons (see
+// migration 012) — there is no team/multi-user concept anymore. Every
+// login gets exactly one of these rows, auto-created on signup, and it's
+// purely an internal account-settings container, never user-facing as
+// an "organization."
 export interface Organization {
   id: string;
   user_id: string;
   name: string;
   auto_post_enabled: boolean;
   ai_system_prompt: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface OrganizationMember {
-  id: string;
-  user_id: string;
-  org_id: string;
-  role: "owner" | "admin" | "member";
   created_at: string;
   updated_at: string;
 }

@@ -1,63 +1,30 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
-import type { Organization, OrganizationMember } from "../types/database";
+import type { Organization } from "../types/database";
 
+// There is no multi-user/team concept — every login has exactly one
+// account row (`doc_organizations`, kept as the internal table name for
+// historical reasons; see migration 012), auto-created the moment they
+// sign up. RLS guarantees this query only ever returns that one row, so
+// there's nothing to "switch" or "select" — just the caller's own data.
 export function useOrganization() {
-  const [currentOrgId, setCurrentOrgId] = useState<string | null>(() => {
-    return localStorage.getItem("doc_current_org_id");
-  });
-
-  useEffect(() => {
-    if (currentOrgId) {
-      localStorage.setItem("doc_current_org_id", currentOrgId);
-    }
-  }, [currentOrgId]);
-
-  const membershipsQuery = useQuery({
-    queryKey: ["memberships"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("doc_organization_members")
-        .select("id, user_id, org_id, role, created_at, updated_at");
-      if (error) throw error;
-      return data as OrganizationMember[];
-    },
-  });
-
-  const orgsQuery = useQuery({
+  const orgQuery = useQuery({
     queryKey: ["organizations"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("doc_organizations")
-        .select("id, user_id, name, auto_post_enabled, ai_system_prompt, created_at, updated_at");
+        .select("id, user_id, name, auto_post_enabled, ai_system_prompt, created_at, updated_at")
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
       if (error) throw error;
-      return data as Organization[];
+      return data as Organization | null;
     },
   });
 
-  // Auto-select first org if none selected or stored org no longer exists
-  useEffect(() => {
-    if (orgsQuery.data && orgsQuery.data.length > 0) {
-      const validOrg = orgsQuery.data.find((o) => o.id === currentOrgId);
-      if (!validOrg) {
-        setCurrentOrgId(orgsQuery.data[0].id);
-      }
-    }
-  }, [currentOrgId, orgsQuery.data]);
-
-  const currentOrg = orgsQuery.data?.find((o) => o.id === currentOrgId) ?? null;
-  const currentMembership = membershipsQuery.data?.find(
-    (m) => m.org_id === currentOrgId
-  ) ?? null;
-
   return {
-    organizations: orgsQuery.data ?? [],
-    memberships: membershipsQuery.data ?? [],
-    currentOrg,
-    currentOrgId,
-    currentMembership,
-    setCurrentOrgId,
-    isLoading: orgsQuery.isLoading || membershipsQuery.isLoading,
+    currentOrg: orgQuery.data ?? null,
+    currentOrgId: orgQuery.data?.id ?? null,
+    isLoading: orgQuery.isLoading,
   };
 }

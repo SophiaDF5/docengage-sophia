@@ -5,45 +5,24 @@ before deploying. Check each item after running it.
 
 ## Right now (pending as of 2026-07-17, updated)
 
-**New since your last check:** migration 011 adds a `custom_fields` column (freeform info per
-lead — job title, company, etc.) to `doc_contacts` and `doc_dm_leads`. Run it in the same SQL
-Editor session as migration 010, right after:
+Your production project has migrations through `009_outreach_messages.sql` applied. Run the
+following three migrations **in this exact order**, in one SQL Editor session, then deploy edge
+functions and the frontend:
 
-```sql
-begin;
-
-alter table public.doc_contacts
-  add column if not exists custom_fields jsonb not null default '{}'::jsonb;
-
-alter table public.doc_dm_leads
-  add column if not exists custom_fields jsonb not null default '{}'::jsonb;
-
-commit;
-```
-
-Verify with:
-```sql
-select column_name from information_schema.columns
-where table_name = 'doc_contacts' and column_name = 'custom_fields';
-```
-
-
-Your production project already has migrations through `009_outreach_messages.sql` applied
-(you've already created your org via a manual insert, and `doc_outreach_messages` exists in its
-original shape). What's still outstanding before the Scraped/Engaged/Manual/Outreach restructuring
-will work:
-
-- [ ] Run `supabase/migrations/010_unify_lead_sources.sql` (see full SQL below) — adds `source` to
-  `doc_contacts`, adds `status`/`linkedin_profile_url`/`last_contacted_at` to `doc_dm_leads`, and
-  makes `doc_outreach_messages.contact_id` nullable + adds `dm_lead_id`. **Without this, Scraped
-  Leads, Manual Added Leads, and Outreach will fail to load with a "column does not exist" error**
-  (the app now surfaces this as a toast instead of a blank screen, but it'll still be broken).
+- [ ] **Migration 010** — adds `source` to `doc_contacts`, adds `status`/`linkedin_profile_url`/
+  `last_contacted_at` to `doc_dm_leads`, makes `doc_outreach_messages.contact_id` nullable + adds
+  `dm_lead_id`. Without this, Scraped Leads, Manual Added Leads, and Outreach fail to load.
+- [ ] **Migration 011** — adds a `custom_fields` column (freeform per-lead info — job title,
+  company, etc.) to `doc_contacts` and `doc_dm_leads`.
+- [ ] **Migration 012 — biggest one: removes the organization/team concept entirely.** Every
+  login becomes its own fully isolated account — no org switching, no inviting teammates, no
+  roles. Check for duplicate account rows first (see below) before running this one.
 - [ ] Deploy edge functions (see "Deploy edge functions" below) — `doc_enrich_emails` and
-  `doc_enrich_emails_apollo` are new since your last deploy, and `doc_scrape_post_commenters` /
-  `doc_inbound_post` had fixes this session.
+  `doc_enrich_emails_apollo` are new since your last deploy, `doc_scrape_post_commenters` /
+  `doc_inbound_post` had fixes, and `doc_invite_member` was deleted.
 - [ ] Confirm `APOLLO_API_KEY` secret is set if you want "Try Apollo" to work.
 - [ ] Redeploy the frontend (`dist` folder) to Netlify — the version currently live predates the
-  SPA reload fix (`_redirects`) and the white-screen hardening.
+  SPA reload fix, the white-screen hardening, and the account-model change.
 
 ### Migration 010 — paste this into the SQL Editor
 
@@ -112,6 +91,109 @@ where table_name = 'doc_outreach_messages' and column_name in ('contact_id', 'dm
 You should see `source` returned from the first query, all three columns from the second, and
 `contact_id`/`dm_lead_id` both `is_nullable = YES` from the third.
 
+### Migration 011 — paste this into the SQL Editor, right after 010
+
+```sql
+begin;
+
+alter table public.doc_contacts
+  add column if not exists custom_fields jsonb not null default '{}'::jsonb;
+
+alter table public.doc_dm_leads
+  add column if not exists custom_fields jsonb not null default '{}'::jsonb;
+
+commit;
+```
+
+Verify with:
+```sql
+select column_name from information_schema.columns
+where table_name = 'doc_contacts' and column_name = 'custom_fields';
+```
+
+### Migration 012 — paste this into the SQL Editor, right after 011
+
+**First, check for duplicate account rows** — your earlier SQL Editor history created more than
+one `doc_organizations` row under your account at different points:
+
+```sql
+select user_id, count(*) as row_count, array_agg(id) as org_ids
+from doc_organizations
+group by user_id
+having count(*) > 1;
+```
+
+If this returns a row, migration 012 still works fine (it never deletes anything), but going
+forward the app assumes one account = one org. Pick which `id` is the one you're actually using
+(check which one your app currently shows data for), and once migration 012 is applied you can
+inspect and clean up the extra row(s):
+
+```sql
+-- inspect what's attached to a specific extra org_id before deleting it
+select 'doc_posts' as tbl, count(*) from doc_posts where org_id = '<extra-org-id>'
+union all select 'doc_contacts', count(*) from doc_contacts where org_id = '<extra-org-id>'
+union all select 'doc_dm_leads', count(*) from doc_dm_leads where org_id = '<extra-org-id>';
+
+-- only once you've confirmed it's empty/unwanted:
+-- delete from doc_organizations where id = '<extra-org-id>';
+```
+
+Now run migration 012 itself:
+
+```sql
+begin;
+
+insert into public.doc_organizations (user_id, name)
+select u.id, 'My Account'
+from auth.users u
+left join public.doc_organizations o on o.user_id = u.id
+where o.id is null;
+
+create or replace function public.doc_handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.doc_organizations (user_id, name)
+  values (new.id, 'My Account')
+  on conflict do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists doc_on_auth_user_created on auth.users;
+create trigger doc_on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.doc_handle_new_user();
+
+create or replace function public.doc_user_org_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select id from public.doc_organizations where user_id = auth.uid();
+$$;
+
+drop table if exists public.doc_organization_members;
+drop function if exists public.doc_user_is_org_admin(uuid);
+
+commit;
+```
+
+Verify it worked:
+
+```sql
+select count(*) from doc_organizations where user_id = auth.uid();
+-- should return 1 (or more, only if you have duplicates you haven't cleaned up yet)
+
+select tgname from pg_trigger where tgname = 'doc_on_auth_user_created';
+-- should return one row
+```
+
 ## Deploy edge functions
 
 Run these from the project root on your own machine (not in this chat — CLI auth tokens should
@@ -127,8 +209,11 @@ npx supabase functions deploy doc_approve_comment --project-ref ijyhyozksijymwei
 npx supabase functions deploy doc_process_tone --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_generate_comment --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_generate_dm --project-ref ijyhyozksijymweikkrm
-npx supabase functions deploy doc_invite_member --project-ref ijyhyozksijymweikkrm
 ```
+
+Note: `doc_invite_member` was deleted (migration 012 removed team invites) — if you deployed it
+previously, you can leave the old deployed version in place (unused, harmless) or delete it from
+the Supabase dashboard's Edge Functions list.
 
 Or deploy everything at once: `npx supabase functions deploy --project-ref ijyhyozksijymweikkrm`
 
@@ -172,11 +257,14 @@ without them, the build produces a broken bundle (this was one of the causes of 
   also shows up in the Outreach page under the "Manual Added" filter.
 - [ ] Change a lead's status on one page (e.g. Outreach) and confirm it updates on the page it
   originated from (e.g. Scraped Leads or Engaged Leads) without a manual refresh.
+- [ ] Settings page shows "Account" (not "Organization") and has no Team Members section.
+- [ ] Top nav bar has no org-switcher dropdown.
 
 ## Production (original checklist — already applied)
 
 - [x] Run `supabase/migrations/001_initial_schema.sql` through `009_outreach_messages.sql`
-- [ ] Run `supabase/migrations/010_unify_lead_sources.sql` — see above
+- [ ] Run `supabase/migrations/010_unify_lead_sources.sql`, `011_add_custom_fields.sql`, and
+  `012_remove_org_teams.sql` — see "Right now" above
 - [ ] Verify RLS is enabled on all `doc_*` tables:
   ```sql
   select tablename, rowsecurity
@@ -212,7 +300,8 @@ without them, the build produces a broken bundle (this was one of the causes of 
   ```
 - [ ] Deploy edge functions — see "Deploy edge functions" above
 - [ ] Create initial owner account in Supabase Auth dashboard (public signup is disabled)
-- [ ] Create initial organization and owner membership record (already done via manual insert)
+- [x] Account row auto-created by the `doc_on_auth_user_created` trigger (migration 012) — no
+  more manual "create organization + membership" step for new accounts
 - [ ] Disable public signup in Auth settings (Settings > Auth > User Signups > disable)
 - [ ] Verify end-to-end: send a test webhook from Make.com and confirm the comment appears in the queue
 
@@ -220,7 +309,7 @@ without them, the build produces a broken bundle (this was one of the causes of 
 
 - [ ] Same as production checklist above
 - [ ] Additionally: run `supabase/seed.sql` to populate test data
-- [ ] Create test auth users (User A, B, C) via Supabase Auth dashboard matching seed UUIDs
+- [ ] Create test auth users (User A, B) via Supabase Auth dashboard matching seed UUIDs
 - [ ] Run abuse tests:
   ```bash
   SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... \
@@ -248,13 +337,6 @@ without them, the build produces a broken bundle (this was one of the causes of 
     -H "Authorization: Bearer <SERVICE_ROLE_KEY>" \
     -H "Content-Type: application/json" \
     -d '{"email":"userb@test.com","password":"test123!","email_confirm":true,"id":"22222222-2222-2222-2222-222222222222"}'
-
-  # User C
-  curl -X POST "http://localhost:54321/auth/v1/admin/users" \
-    -H "apikey: <SERVICE_ROLE_KEY>" \
-    -H "Authorization: Bearer <SERVICE_ROLE_KEY>" \
-    -H "Content-Type: application/json" \
-    -d '{"email":"userc@test.com","password":"test123!","email_confirm":true,"id":"33333333-3333-3333-3333-333333333333"}'
   ```
 - [ ] Set edge function secrets: see `scripts/setup-integrations.md`
 - [ ] `supabase functions serve` to run edge functions locally

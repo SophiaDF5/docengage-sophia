@@ -4,9 +4,16 @@
 -- (via dashboard, CLI, or the abuse test setup script)
 --
 -- Users:
---   User A: 11111111-1111-1111-1111-111111111111 (owner of Acme Health, owner of Beta MedTech)
---   User B: 22222222-2222-2222-2222-222222222222 (owner of Gamma Orthopedics, owner of Delta Clinical)
---   User C: 33333333-3333-3333-3333-333333333333 (member of Acme Health — tests cross-user org access)
+--   User A: 11111111-1111-1111-1111-111111111111
+--   User B: 22222222-2222-2222-2222-222222222222
+--
+-- Since migration 012, every login is its own fully isolated account —
+-- there is no team/multi-user concept anymore. Each user gets exactly one
+-- doc_organizations row (an internal per-account settings container, not a
+-- shared "organization" — auto-created by the doc_on_auth_user_created
+-- trigger on real signups). This seed inserts that row directly for the
+-- two test users rather than relying on the trigger, since the trigger
+-- only fires on actual auth.users inserts.
 
 begin;
 
@@ -19,28 +26,13 @@ begin;
 -- ============================================================
 
 -- ============================================================
--- Organizations
+-- Accounts (one doc_organizations row per user)
 -- ============================================================
 
 insert into public.doc_organizations (id, user_id, name, auto_post_enabled, ai_system_prompt)
 values
-  ('a1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'Acme Health Group', false, 'You are a professional healthcare CEO. Focus on empathy and leadership.'),
-  ('a1111111-2222-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'Beta MedTech', true, 'You are an energetic startup founder bridging tech and medicine.'),
-  ('b2222222-1111-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'Gamma Orthopedics', false, 'You are an academic researcher. Use formal language.'),
-  ('b2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'Delta Clinical', true, 'You are a friendly medical device sales representative.')
-on conflict do nothing;
-
--- ============================================================
--- Organization Members
--- ============================================================
-
-insert into public.doc_organization_members (id, user_id, org_id, role)
-values
-  ('e0111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'owner'),
-  ('e0111111-2222-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'a1111111-2222-1111-1111-111111111111', 'owner'),
-  ('e0222222-1111-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'b2222222-1111-2222-2222-222222222222', 'owner'),
-  ('e0222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'b2222222-2222-2222-2222-222222222222', 'owner'),
-  ('e0333333-1111-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333', 'a1111111-1111-1111-1111-111111111111', 'member')
+  ('a1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'My Account', false, 'You are a professional healthcare CEO. Focus on empathy and leadership.'),
+  ('b2222222-1111-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'My Account', true, 'You are an academic researcher. Use formal language.')
 on conflict do nothing;
 
 -- ============================================================
@@ -67,18 +59,19 @@ values
 on conflict do nothing;
 
 -- ============================================================
--- Contacts
+-- Contacts (status values match the current check constraint:
+-- pending / messaged / engaged — see migration 007)
 -- ============================================================
 
-insert into public.doc_contacts (id, user_id, org_id, linkedin_profile_url, full_name, status, last_contacted_at)
+insert into public.doc_contacts (id, user_id, org_id, linkedin_profile_url, full_name, status, source, last_contacted_at)
 values
-  ('f0111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'https://linkedin.com/in/drsmith', 'Dr. Alan Smith', 'no_action', null),
-  ('f0111111-2222-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'https://linkedin.com/in/drjones', 'Dr. Sarah Jones', 'connected', now()),
-  ('f0111111-3333-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'https://linkedin.com/in/drpatel', 'Dr. Raj Patel', 'no_action', null),
-  ('f0222222-1111-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'b2222222-1111-2222-2222-222222222222', 'https://linkedin.com/in/drevans', 'Dr. Marcus Evans', 'replied', now())
+  ('f0111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'https://linkedin.com/in/drsmith', 'Dr. Alan Smith', 'pending', 'scraped', null),
+  ('f0111111-2222-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'https://linkedin.com/in/drjones', 'Dr. Sarah Jones', 'messaged', 'scraped', now()),
+  ('f0111111-3333-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'https://linkedin.com/in/drpatel', 'Dr. Raj Patel', 'pending', 'manual', null),
+  ('f0222222-1111-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'b2222222-1111-2222-2222-222222222222', 'https://linkedin.com/in/drevans', 'Dr. Marcus Evans', 'engaged', 'scraped', now())
 on conflict do nothing;
 
--- Backdate the stale contact so daily followup cron picks it up
+-- Backdate the stale contact so daily followup logic (if/when built) picks it up
 update public.doc_contacts
   set created_at = now() - interval '10 days'
   where id = 'f0111111-3333-1111-1111-111111111111';

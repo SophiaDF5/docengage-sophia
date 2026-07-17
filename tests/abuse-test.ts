@@ -1,16 +1,23 @@
 // =============================================================================
 // ABUSE TEST SCRIPT — DocEngage security verification
 // =============================================================================
-// Tests cross-org isolation, double-approval replay, privilege escalation,
-// auth bypass, and rate limiting.
+// Tests cross-account isolation, double-approval replay, auth bypass, and
+// rate limiting.
 //
 // Usage:
 //   SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... \
 //     deno test --allow-net --allow-env tests/abuse-test.ts
 //
-// NOTE: The service_role key is used ONLY in this test script to set up
-// test fixtures (create users, seed data). It is never used in app code
-// except doc_daily_followups (cron).
+// NOTE: There is no team/multi-user concept — every login is its own fully
+// isolated account (see migration 012). Each user gets exactly one
+// `doc_organizations` row (an internal per-account settings container, not a
+// shared "organization"), auto-created on signup. These tests verify that
+// User A and User B, as two entirely separate accounts, can never see or
+// modify each other's data.
+//
+// The service_role key is used ONLY in this test script to set up test
+// fixtures (create users, seed data). It is never used in app code except
+// doc_inbound_post (Make.com webhook, no user session available).
 // =============================================================================
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.103.3";
@@ -31,7 +38,6 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 
 const USER_A = { email: "test-user-a@docengage.test", password: "TestPassword123!" };
 const USER_B = { email: "test-user-b@docengage.test", password: "TestPassword456!" };
-const USER_C = { email: "test-user-c@docengage.test", password: "TestPassword789!" };
 
 interface TestUser {
   id: string;
@@ -76,7 +82,7 @@ let commentB_id: string;
 let contactB_id: string;
 
 async function cleanup() {
-  for (const email of [USER_A.email, USER_B.email, USER_C.email]) {
+  for (const email of [USER_A.email, USER_B.email]) {
     const { data } = await admin.auth.admin.listUsers();
     const user = data?.users?.find((u) => u.email === email);
     if (user) {
@@ -85,7 +91,6 @@ async function cleanup() {
       await admin.from("doc_posts").delete().eq("user_id", user.id);
       await admin.from("doc_contacts").delete().eq("user_id", user.id);
       await admin.from("doc_tone_samples").delete().eq("user_id", user.id);
-      await admin.from("doc_organization_members").delete().eq("user_id", user.id);
       await admin.from("doc_organizations").delete().eq("user_id", user.id);
       await admin.auth.admin.deleteUser(user.id);
     }
@@ -96,7 +101,6 @@ async function cleanup() {
 
 let userA: TestUser;
 let userB: TestUser;
-let userC: TestUser;
 
 Deno.test({
   name: "Setup: Create test users and seed data",
@@ -104,30 +108,20 @@ Deno.test({
     await cleanup();
     userA = await setupUser(USER_A);
     userB = await setupUser(USER_B);
-    userC = await setupUser(USER_C);
     assertNotEquals(userA.id, userB.id);
-    assertNotEquals(userA.id, userC.id);
 
-    // Create orgs via service role (bypasses RLS for test setup)
+    // The doc_on_auth_user_created trigger (migration 012) auto-creates a
+    // doc_organizations row for every new auth user. Fetch those rather
+    // than inserting our own, so the test exercises the real signup path.
     const { data: oA, error: oAError } = await admin.from("doc_organizations")
-      .insert({ user_id: userA.id, name: "Test Org A" })
-      .select("id").single();
-    if (oAError || !oA) throw new Error(`Failed to create Test Org A: ${oAError?.message}`);
+      .select("id").eq("user_id", userA.id).single();
+    if (oAError || !oA) throw new Error(`User A's account row was not auto-created: ${oAError?.message}`);
     orgA_id = oA.id;
 
     const { data: oB, error: oBError } = await admin.from("doc_organizations")
-      .insert({ user_id: userB.id, name: "Test Org B" })
-      .select("id").single();
-    if (oBError || !oB) throw new Error(`Failed to create Test Org B: ${oBError?.message}`);
+      .select("id").eq("user_id", userB.id).single();
+    if (oBError || !oB) throw new Error(`User B's account row was not auto-created: ${oBError?.message}`);
     orgB_id = oB.id;
-
-    // Create memberships
-    const { error: memberError } = await admin.from("doc_organization_members").insert([
-      { user_id: userA.id, org_id: orgA_id, role: "owner" },
-      { user_id: userB.id, org_id: orgB_id, role: "owner" },
-      { user_id: userC.id, org_id: orgA_id, role: "member" }, // C is member of A's org
-    ]);
-    if (memberError) throw new Error(`Failed to create memberships: ${memberError.message}`);
 
     // Create posts
     const { data: pA, error: pAError } = await admin.from("doc_posts")
@@ -172,63 +166,63 @@ Deno.test({
 });
 
 // ============================================================
-// Cross-Org Data Isolation
+// Cross-Account Data Isolation
 // ============================================================
 
 Deno.test({
-  name: "Isolation: User A cannot see Org B's posts",
+  name: "Isolation: User A cannot see User B's posts",
   fn: async () => {
     const { data } = await userA.client
       .from("doc_posts")
       .select("id")
       .eq("id", postB_id);
-    assertEquals(data?.length ?? 0, 0, "User A should NOT see Org B's post");
+    assertEquals(data?.length ?? 0, 0, "User A should NOT see User B's post");
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "Isolation: User A cannot see Org B's comments",
+  name: "Isolation: User A cannot see User B's comments",
   fn: async () => {
     const { data } = await userA.client
       .from("doc_comments")
       .select("id")
       .eq("id", commentB_id);
-    assertEquals(data?.length ?? 0, 0, "User A should NOT see Org B's comment");
+    assertEquals(data?.length ?? 0, 0, "User A should NOT see User B's comment");
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "Isolation: User A cannot see Org B's contacts",
+  name: "Isolation: User A cannot see User B's contacts",
   fn: async () => {
     const { data } = await userA.client
       .from("doc_contacts")
       .select("id")
       .eq("id", contactB_id);
-    assertEquals(data?.length ?? 0, 0, "User A should NOT see Org B's contact");
+    assertEquals(data?.length ?? 0, 0, "User A should NOT see User B's contact");
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "Isolation: User A cannot see Org B's organization",
+  name: "Isolation: User A cannot see User B's account settings row",
   fn: async () => {
     const { data } = await userA.client
       .from("doc_organizations")
       .select("id")
       .eq("id", orgB_id);
-    assertEquals(data?.length ?? 0, 0, "User A should NOT see Org B");
+    assertEquals(data?.length ?? 0, 0, "User A should NOT see User B's account row");
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "Isolation: User A cannot update Org B's post",
+  name: "Isolation: User A cannot update User B's post",
   fn: async () => {
     await userA.client
       .from("doc_posts")
@@ -236,62 +230,54 @@ Deno.test({
       .eq("id", postB_id);
 
     const { data } = await admin.from("doc_posts").select("content").eq("id", postB_id).single();
-    assertNotEquals(data?.content, "Hacked", "User A should NOT modify Org B's post");
+    assertNotEquals(data?.content, "Hacked", "User A should NOT modify User B's post");
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "Isolation: User A cannot delete Org B's contact",
+  name: "Isolation: User A cannot delete User B's contact",
   fn: async () => {
     await userA.client.from("doc_contacts").delete().eq("id", contactB_id);
 
     const { data } = await admin.from("doc_contacts").select("id").eq("id", contactB_id);
-    assertEquals(data?.length, 1, "Org B's contact should NOT be deleted by User A");
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-// ============================================================
-// Cross-User Org Access (User C as member of Org A)
-// ============================================================
-
-Deno.test({
-  name: "Org access: User C (member) CAN see Org A's posts",
-  fn: async () => {
-    const { data } = await userC.client
-      .from("doc_posts")
-      .select("id")
-      .eq("id", postA_id);
-    assertEquals(data?.length, 1, "User C should see Org A's post as a member");
+    assertEquals(data?.length, 1, "User B's contact should NOT be deleted by User A");
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "Org access: User C (member) CAN see Org A's comments",
+  name: "Isolation: User A cannot update User B's account settings (auto_post_enabled)",
   fn: async () => {
-    const { data } = await userC.client
-      .from("doc_comments")
-      .select("id")
-      .eq("id", commentA_id);
-    assertEquals(data?.length, 1, "User C should see Org A's comment as a member");
+    await userA.client
+      .from("doc_organizations")
+      .update({ auto_post_enabled: true })
+      .eq("id", orgB_id);
+
+    const { data } = await admin.from("doc_organizations")
+      .select("auto_post_enabled")
+      .eq("id", orgB_id)
+      .single();
+    assertEquals(data?.auto_post_enabled, false, "User A should NOT be able to change User B's settings");
   },
   sanitizeOps: false,
   sanitizeResources: false,
 });
 
 Deno.test({
-  name: "Org access: User C (member) cannot see Org B's posts",
+  name: "Isolation: User A cannot delete User B's account",
   fn: async () => {
-    const { data } = await userC.client
-      .from("doc_posts")
+    await userA.client
+      .from("doc_organizations")
+      .delete()
+      .eq("id", orgB_id);
+
+    const { data } = await admin.from("doc_organizations")
       .select("id")
-      .eq("id", postB_id);
-    assertEquals(data?.length ?? 0, 0, "User C should NOT see Org B's post");
+      .eq("id", orgB_id);
+    assertEquals(data?.length, 1, "User A should NOT be able to delete User B's account");
   },
   sanitizeOps: false,
   sanitizeResources: false,
@@ -332,75 +318,6 @@ Deno.test({
     await admin.from("doc_comments")
       .update({ status: "pending", approved_by: null })
       .eq("id", commentA_id);
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-// ============================================================
-// Privilege Escalation
-// ============================================================
-
-Deno.test({
-  name: "Privilege: Member (User C) cannot update org settings (auto_post_enabled)",
-  fn: async () => {
-    // User C (member) tries to enable auto_post on Org A
-    await userC.client
-      .from("doc_organizations")
-      .update({ auto_post_enabled: true })
-      .eq("id", orgA_id);
-
-    // Verify it didn't change
-    const { data } = await admin.from("doc_organizations")
-      .select("auto_post_enabled")
-      .eq("id", orgA_id)
-      .single();
-    assertEquals(data?.auto_post_enabled, false, "Member should NOT be able to change auto_post_enabled");
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name: "Privilege: Member (User C) cannot add members to org",
-  fn: async () => {
-    const { error } = await userC.client
-      .from("doc_organization_members")
-      .insert({ user_id: userB.id, org_id: orgA_id, role: "member" });
-
-    assert(error !== null, "Member should NOT be able to invite others (requires admin/owner)");
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name: "Privilege: Member (User C) cannot delete the organization",
-  fn: async () => {
-    await userC.client
-      .from("doc_organizations")
-      .delete()
-      .eq("id", orgA_id);
-
-    const { data } = await admin.from("doc_organizations")
-      .select("id")
-      .eq("id", orgA_id);
-    assertEquals(data?.length, 1, "Member should NOT be able to delete the org");
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name: "Privilege: User A cannot escalate own role via direct update",
-  fn: async () => {
-    // User B tries to change their role in Org B from owner to... still owner (no escalation path)
-    // But User A tries to insert themselves as admin in Org B
-    const { error } = await userA.client
-      .from("doc_organization_members")
-      .insert({ user_id: userA.id, org_id: orgB_id, role: "admin" });
-
-    assert(error !== null, "User A should NOT be able to add themselves to Org B");
   },
   sanitizeOps: false,
   sanitizeResources: false,
