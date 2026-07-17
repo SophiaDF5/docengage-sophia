@@ -153,6 +153,7 @@ Run these commands in order. Do not skip any step.
 - supabase/migrations/008_dm_leads.sql → Creates doc_dm_leads
 - supabase/migrations/009_outreach_messages.sql → Creates doc_outreach_messages
 - supabase/migrations/010_unify_lead_sources.sql → Adds `source` to doc_contacts; adds `status`/`linkedin_profile_url`/`last_contacted_at` to doc_dm_leads; makes doc_outreach_messages.contact_id nullable and adds dm_lead_id, so a lead from either table can flow through the unified Outreach queue
+- supabase/migrations/011_add_custom_fields.sql → Adds `custom_fields` jsonb column to doc_contacts and doc_dm_leads for freeform per-lead info (title, company, etc.), no fixed schema
 
 ### Deployment
 - docs/deployment/MANUAL_SQL_OPERATIONS.md  → Manual SQL that must be run
@@ -278,6 +279,7 @@ imported via the Outreach page's CSV/Excel upload (also tagged `source = 'manual
 | is_connected | boolean | not null, default false |
 | status | text | not null, default 'pending', check in ('pending', 'messaged', 'engaged') |
 | source | text | not null, default 'scraped', check in ('scraped', 'manual') — added in migration 010 |
+| custom_fields | jsonb | not null, default '{}' — freeform key/value lead info (title, company, etc.), added in migration 011 |
 | last_contacted_at | timestamptz | |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
@@ -315,6 +317,7 @@ into the Outreach queue.
 | links | text | |
 | linkedin_profile_url | text | added in migration 010 |
 | status | text | not null, default 'pending', check in ('pending', 'messaged', 'engaged') — added in migration 010 |
+| custom_fields | jsonb | not null, default '{}' — freeform key/value lead info, added in migration 011 |
 | last_contacted_at | timestamptz | added in migration 010 |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |

@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabaseClient";
 import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
 import { AddContactDialog } from "../components/AddContactDialog";
+import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -54,7 +55,7 @@ export function ManualLeads() {
       const { data, error } = await supabase
         .from("doc_contacts")
         .select(
-          "id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, last_contacted_at, created_at, updated_at"
+          "id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, custom_fields, last_contacted_at, created_at, updated_at"
         )
         .eq("org_id", currentOrgId)
         .order("created_at", { ascending: false });
@@ -207,6 +208,7 @@ export function ManualLeads() {
                 <TableHead>Headline</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Details</TableHead>
                 <TableHead>Last Contacted</TableHead>
                 <TableHead>Added</TableHead>
                 <TableHead className="w-20"></TableHead>
@@ -258,6 +260,15 @@ export function ManualLeads() {
                         ))}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                  </TableCell>
+                  <TableCell>
+                    <CustomFieldsDialog
+                      table="doc_contacts"
+                      recordId={contact.id}
+                      leadName={contact.full_name}
+                      customFields={contact.custom_fields}
+                      queryKey={["contacts", currentOrgId]}
+                    />
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {contact.last_contacted_at

@@ -5,6 +5,7 @@ import Papa from "papaparse";
 import { supabase } from "../lib/supabaseClient";
 import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
+import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -87,7 +88,7 @@ export function Contacts() {
       if (!currentOrgId) return [];
       const { data, error } = await supabase
         .from("doc_contacts")
-        .select("id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, last_contacted_at, created_at, updated_at")
+        .select("id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, custom_fields, last_contacted_at, created_at, updated_at")
         .eq("org_id", currentOrgId)
         .order("created_at", { ascending: false });
 
@@ -344,6 +345,7 @@ export function Contacts() {
                 <TableHead>Email</TableHead>
                 <TableHead>Connected</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Details</TableHead>
                 <TableHead>Last Contacted</TableHead>
                 <TableHead>Added</TableHead>
                 <TableHead className="w-12"></TableHead>
@@ -434,6 +436,15 @@ export function Contacts() {
                         ))}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                  </TableCell>
+                  <TableCell>
+                    <CustomFieldsDialog
+                      table="doc_contacts"
+                      recordId={contact.id}
+                      leadName={contact.full_name}
+                      customFields={contact.custom_fields}
+                      queryKey={["contacts", currentOrgId]}
+                    />
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {contact.last_contacted_at

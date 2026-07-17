@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabaseClient";
 import { useOrganization } from "../hooks/useOrganization";
+import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
@@ -242,8 +243,24 @@ export function Leads() {
                   {lead.bio && (
                     <p className="text-sm text-muted-foreground">{lead.bio}</p>
                   )}
+                  {Object.keys(lead.custom_fields ?? {}).length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {Object.entries(lead.custom_fields).map(([key, value]) => (
+                        <Badge key={key} variant="outline" className="text-xs font-normal">
+                          {key}: {value}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <CustomFieldsDialog
+                    table="doc_dm_leads"
+                    recordId={lead.id}
+                    leadName={lead.name}
+                    customFields={lead.custom_fields ?? {}}
+                    queryKey={["dm-leads", currentOrgId]}
+                  />
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       render={<Button variant="ghost" size="sm" className="gap-1 h-7" />}

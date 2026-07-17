@@ -3,7 +3,30 @@
 SQL operations that must be run manually in the Supabase SQL Editor per environment
 before deploying. Check each item after running it.
 
-## Right now (pending as of 2026-07-17)
+## Right now (pending as of 2026-07-17, updated)
+
+**New since your last check:** migration 011 adds a `custom_fields` column (freeform info per
+lead — job title, company, etc.) to `doc_contacts` and `doc_dm_leads`. Run it in the same SQL
+Editor session as migration 010, right after:
+
+```sql
+begin;
+
+alter table public.doc_contacts
+  add column if not exists custom_fields jsonb not null default '{}'::jsonb;
+
+alter table public.doc_dm_leads
+  add column if not exists custom_fields jsonb not null default '{}'::jsonb;
+
+commit;
+```
+
+Verify with:
+```sql
+select column_name from information_schema.columns
+where table_name = 'doc_contacts' and column_name = 'custom_fields';
+```
+
 
 Your production project already has migrations through `009_outreach_messages.sql` applied
 (you've already created your org via a manual insert, and `doc_outreach_messages` exists in its

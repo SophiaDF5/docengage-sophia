@@ -53,6 +53,9 @@ export interface CommentWithPost extends Comment {
 
 export type ContactStatus = "pending" | "messaged" | "engaged";
 export type ContactSource = "scraped" | "manual";
+// Freeform key/value info a user attaches to a lead (title, company, phone,
+// specialty, etc.) — see migration 011. No fixed schema on purpose.
+export type CustomFields = Record<string, string>;
 
 export interface Contact {
   id: string;
@@ -65,6 +68,7 @@ export interface Contact {
   is_connected: boolean;
   status: ContactStatus;
   source: ContactSource;
+  custom_fields: CustomFields;
   last_contacted_at: string | null;
   created_at: string;
   updated_at: string;
@@ -92,6 +96,7 @@ export interface DmLead {
   links: string | null;
   linkedin_profile_url: string | null;
   status: ContactStatus;
+  custom_fields: CustomFields;
   last_contacted_at: string | null;
   created_at: string;
   updated_at: string;
