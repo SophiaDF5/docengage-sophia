@@ -7,6 +7,7 @@ import { useOrganization } from "../hooks/useOrganization";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
+import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import {
@@ -24,12 +25,14 @@ import {
   CheckCircle2,
   Copy,
   SquareArrowOutUpRight,
+  X,
 } from "lucide-react";
 import type { Contact, ContactStatus, DmLead } from "../types/database";
 
 type Mode = "bulk" | "personalized";
 type SourceTable = "contacts" | "dm_leads";
 type FilterType = "scraped" | "manual" | "engaged";
+const UNTAGGED = "__untagged__";
 
 interface UnifiedLead {
   key: string; // `${sourceTable}:${id}`
@@ -49,6 +52,12 @@ const FILTER_OPTIONS: { value: FilterType; label: string }[] = [
   { value: "manual", label: "Manual Added" },
 ];
 
+const STATUS_FILTER_OPTIONS: { value: ContactStatus; label: string }[] = [
+  { value: "pending", label: "Pending" },
+  { value: "messaged", label: "Messaged" },
+  { value: "engaged", label: "Engaged" },
+];
+
 export function Outreach() {
   const { currentOrgId } = useOrganization();
   const queryClient = useQueryClient();
@@ -57,6 +66,13 @@ export function Outreach() {
   const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(
     new Set(["scraped", "engaged", "manual"])
   );
+  // Empty set = no restriction (show every status / every tag). Clicking a
+  // chip adds a restriction; clicking it again removes it. This is separate
+  // from activeFilters (source) so you can combine "Manual Added" + tag
+  // "YouTube" + "Pending only" + a name search all at once.
+  const [activeStatusFilters, setActiveStatusFilters] = useState<Set<ContactStatus>>(new Set());
+  const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(new Set());
+  const [searchText, setSearchText] = useState("");
   const [mode, setMode] = useState<Mode>("bulk");
   const [bulkMessage, setBulkMessage] = useState("");
   const [personalMessages, setPersonalMessages] = useState<Record<string, string>>({});
@@ -137,10 +153,44 @@ export function Outreach() {
     return [...fromContacts, ...fromDmLeads];
   }, [contactsQuery.data, dmLeadsQuery.data]);
 
-  const visibleLeads = useMemo(
+  // Only doc_contacts rows carry a tag (dm_leads/Engaged never do) — built
+  // from whatever's currently in scope after the source filter, so the tag
+  // chip list doesn't show tags that don't apply to the sources you've
+  // already narrowed down to.
+  const sourceFilteredLeads = useMemo(
     () => allLeads.filter((l) => activeFilters.has(l.filterType)),
     [allLeads, activeFilters]
   );
+
+  const distinctTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of sourceFilteredLeads) {
+      if (l.tag && l.tag.trim()) set.add(l.tag.trim());
+    }
+    return [...set].sort();
+  }, [sourceFilteredLeads]);
+
+  const hasUntagged = useMemo(
+    () => sourceFilteredLeads.some((l) => !l.tag || !l.tag.trim()),
+    [sourceFilteredLeads]
+  );
+
+  const visibleLeads = useMemo(() => {
+    const q = searchText.trim().toLowerCase();
+    return sourceFilteredLeads.filter((l) => {
+      if (activeStatusFilters.size > 0 && !activeStatusFilters.has(l.status)) return false;
+      if (activeTagFilters.size > 0) {
+        const tagKey = l.tag && l.tag.trim() ? l.tag.trim() : UNTAGGED;
+        if (!activeTagFilters.has(tagKey)) return false;
+      }
+      if (q) {
+        const matchesName = l.full_name.toLowerCase().includes(q);
+        const matchesHeadline = l.headline?.toLowerCase().includes(q) ?? false;
+        if (!matchesName && !matchesHeadline) return false;
+      }
+      return true;
+    });
+  }, [sourceFilteredLeads, activeStatusFilters, activeTagFilters, searchText]);
 
   const leadsByKey = useMemo(() => {
     const map = new Map<string, UnifiedLead>();
@@ -159,6 +209,33 @@ export function Outreach() {
       else next.add(value);
       return next;
     });
+  }
+
+  function toggleStatusFilter(value: ContactStatus) {
+    setActiveStatusFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  }
+
+  function toggleTagFilter(value: string) {
+    setActiveTagFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  }
+
+  const hasActiveRefinement =
+    activeStatusFilters.size > 0 || activeTagFilters.size > 0 || searchText.trim() !== "";
+
+  function clearRefinements() {
+    setActiveStatusFilters(new Set());
+    setActiveTagFilters(new Set());
+    setSearchText("");
   }
 
   function toggleSelect(key: string) {
@@ -374,8 +451,15 @@ export function Outreach() {
         <CardContent className="pt-6 space-y-4">
           <h2 className="text-sm font-medium">1. Choose your leads</h2>
 
+          <Input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Search by name or headline..."
+            className="max-w-sm"
+          />
+
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-muted-foreground mr-1">Filter:</span>
+            <span className="text-xs text-muted-foreground mr-1">Source:</span>
             {FILTER_OPTIONS.map((opt) => (
               <Badge
                 key={opt.value}
@@ -388,6 +472,57 @@ export function Outreach() {
             ))}
           </div>
 
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground mr-1">Status:</span>
+            {STATUS_FILTER_OPTIONS.map((opt) => (
+              <Badge
+                key={opt.value}
+                variant={activeStatusFilters.has(opt.value) ? "default" : "outline"}
+                className="cursor-pointer select-none"
+                onClick={() => toggleStatusFilter(opt.value)}
+              >
+                {opt.label}
+              </Badge>
+            ))}
+            <span className="text-xs text-muted-foreground">
+              {activeStatusFilters.size === 0 ? "(showing all)" : ""}
+            </span>
+          </div>
+
+          {(distinctTags.length > 0 || hasUntagged) && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted-foreground mr-1">Tag:</span>
+              {distinctTags.map((tag) => (
+                <Badge
+                  key={tag}
+                  variant={activeTagFilters.has(tag) ? "default" : "outline"}
+                  className="cursor-pointer select-none"
+                  onClick={() => toggleTagFilter(tag)}
+                >
+                  {tag}
+                </Badge>
+              ))}
+              {hasUntagged && (
+                <Badge
+                  variant={activeTagFilters.has(UNTAGGED) ? "default" : "outline"}
+                  className="cursor-pointer select-none"
+                  onClick={() => toggleTagFilter(UNTAGGED)}
+                >
+                  Untagged
+                </Badge>
+              )}
+              <span className="text-xs text-muted-foreground">
+                {activeTagFilters.size === 0 ? "(showing all)" : ""}
+              </span>
+            </div>
+          )}
+
+          {hasActiveRefinement && (
+            <Button variant="ghost" size="sm" onClick={clearRefinements} className="h-7 -ml-2">
+              <X className="h-3.5 w-3.5 mr-1" /> Clear status/tag/search filters
+            </Button>
+          )}
+
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading leads...</p>
           ) : allLeads.length === 0 ? (
@@ -396,7 +531,7 @@ export function Outreach() {
             </p>
           ) : visibleLeads.length === 0 ? (
             <p className="text-sm text-muted-foreground py-6 text-center">
-              No leads match the selected filters.
+              No leads match the current filters.
             </p>
           ) : (
             <div className="border rounded-md divide-y">
@@ -444,6 +579,7 @@ export function Outreach() {
 
           <p className="text-xs text-muted-foreground">
             {selectedKeys.size} lead{selectedKeys.size === 1 ? "" : "s"} selected
+            {visibleLeads.length !== allLeads.length && ` — ${visibleLeads.length} of ${allLeads.length} leads shown`}
           </p>
         </CardContent>
       </Card>
