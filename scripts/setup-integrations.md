@@ -91,7 +91,28 @@ Notes:
   the actor's input schema before deploying, since a wrong field name fails silently rather
   than erroring.
 
-## 4. Configure Supabase Secrets
+## 4. Apollo.io API Key (second-attempt email finder)
+
+Powers the "Try Apollo" button on the Contacts page (`doc_enrich_emails_apollo`) — a deliberately
+separate, lower-capped (20 leads/click) second attempt at finding emails, meant for leads the
+primary "Find Emails" search already came up empty on.
+
+1. Go to [developer.apollo.io](https://developer.apollo.io/) and generate an API key
+2. Set it as a Supabase secret (see step 5 below) as `APOLLO_API_KEY`
+
+Notes:
+- Apollo credits are typically much scarcer than Apify usage (check your plan — free/low tiers can
+  be as low as ~75-100 credits/month). Only `reveal_personal_emails: true` calls consume a credit;
+  don't raise the 20-per-click cap without checking your plan's actual monthly budget first.
+- The free Apollo plan does **not** include API access — you need a paid plan with API access for
+  this integration to work at all. A free account can still be used to manually search people one
+  at a time on Apollo's own site, just not through this app.
+- This only uses the synchronous `reveal_personal_emails` path. Apollo's `run_waterfall_email`
+  parameter gives broader coverage but requires a public HTTPS webhook receiver to get results back
+  asynchronously — not built yet. If you want that, it's a real scope addition (new endpoint +
+  async job correlation), not a quick tweak.
+
+## 5. Configure Supabase Secrets
 
 ### Local development
 
@@ -101,6 +122,7 @@ supabase secrets set MAKE_WEBHOOK_SECRET="<your-webhook-secret>"
 supabase secrets set MAKE_WEBHOOK_ID="<path-from-make-webhook-url>"
 supabase secrets set OPENAI_API_KEY="<your-openai-key>"
 supabase secrets set APIFY_API_KEY="<your-apify-token>"
+supabase secrets set APOLLO_API_KEY="<your-apollo-key>"
 ```
 
 ### Hosted (production/staging)
@@ -114,6 +136,7 @@ supabase secrets set MAKE_WEBHOOK_SECRET="<your-webhook-secret>"
 supabase secrets set MAKE_WEBHOOK_ID="<path-from-make-webhook-url>"
 supabase secrets set OPENAI_API_KEY="<your-openai-key>"
 supabase secrets set APIFY_API_KEY="<your-apify-token>"
+supabase secrets set APOLLO_API_KEY="<your-apollo-key>"
 ```
 
 ### Verify secrets are set
@@ -122,9 +145,10 @@ supabase secrets set APIFY_API_KEY="<your-apify-token>"
 supabase secrets list
 ```
 
-You should see `MAKE_WEBHOOK_SECRET`, `MAKE_WEBHOOK_ID`, `OPENAI_API_KEY`, and `APIFY_API_KEY` listed.
+You should see `MAKE_WEBHOOK_SECRET`, `MAKE_WEBHOOK_ID`, `OPENAI_API_KEY`, `APIFY_API_KEY`, and
+`APOLLO_API_KEY` listed.
 
-## 4. Verify End-to-End
+## 6. Verify End-to-End
 
 ### Test inbound webhook
 
@@ -163,7 +187,7 @@ curl -X POST "${SUPABASE_URL}/functions/v1/doc_approve_comment" \
 
 Expected: `200` with `{ "data": { "id": "...", "status": "approved", "posted": true } }`
 
-## 5. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
@@ -175,3 +199,5 @@ Expected: `200` with `{ "data": { "id": "...", "status": "approved", "posted": t
 | `500` with "Apify API key not configured" | Secret not set | Run `supabase secrets set APIFY_API_KEY=...` |
 | Scrape reports 0 items / 0 saved with no error | Actor ran but found nothing — usually a LinkedIn soft-block on the no-cookie scraper, a post with genuinely no comments, or a bad URL | Click "View run" on the warning toast (or `supabase functions logs doc_scrape_post_commenters`) to see the actual Apify run, then retry |
 | Scrape times out after ~2 minutes | Post has too many comments for the 120s poll budget | Retry — large posts may need a second attempt; consider raising `maxWaitMs` in `doc_scrape_post_commenters/index.ts` if this recurs often |
+| `500` with "Apollo API key not configured" | Secret not set | Run `supabase secrets set APOLLO_API_KEY=...` |
+| "Try Apollo" always reports 0 found | Could be genuinely no matches, or the response field-name guess in `extractEmail()` is wrong | Check edge function logs (`supabase functions logs doc_enrich_emails_apollo`) for `_debug_first_result` and confirm the real field name matches what the code checks |

@@ -147,6 +147,12 @@ Run these commands in order. Do not skip any step.
 - supabase/migrations/002_fix_rls_org_scoped.sql → Fixes RLS to org-membership scoping, adds helper functions
 - supabase/migrations/003_unique_post_per_org.sql → Unique constraints on posts and contacts per org
 - supabase/migrations/004_fix_members_rls_recursion.sql → SECURITY DEFINER on helper functions to fix RLS recursion
+- supabase/migrations/005_rework_schema.sql → Schema rework
+- supabase/migrations/006_add_email_to_contacts.sql → Adds `email` column to doc_contacts
+- supabase/migrations/007_add_connection_degree.sql → Adds `is_connected` to doc_contacts
+- supabase/migrations/008_dm_leads.sql → Creates doc_dm_leads
+- supabase/migrations/009_outreach_messages.sql → Creates doc_outreach_messages
+- supabase/migrations/010_unify_lead_sources.sql → Adds `source` to doc_contacts; adds `status`/`linkedin_profile_url`/`last_contacted_at` to doc_dm_leads; makes doc_outreach_messages.contact_id nullable and adds dm_lead_id, so a lead from either table can flow through the unified Outreach queue
 
 ### Deployment
 - docs/deployment/MANUAL_SQL_OPERATIONS.md  → Manual SQL that must be run
@@ -159,14 +165,16 @@ Run these commands in order. Do not skip any step.
 - supabase/functions/doc_daily_followups/index.ts → Cron job pushing stale contacts to Make.com
 - supabase/functions/doc_invite_member/index.ts  → Invites user to org (admin/owner only, uses service_role)
 - supabase/functions/doc_scrape_post_commenters/index.ts → Lead scraper: pulls LinkedIn post commenters via Apify (HarvestAPI actor), filters for healthcare keywords, upserts doc_contacts
+- supabase/functions/doc_enrich_emails/index.ts → Attempts to find emails for existing doc_contacts via a second Apify actor (HarvestAPI profile+email search) — partial coverage only, not guaranteed per lead
+- supabase/functions/doc_enrich_emails_apollo/index.ts → Second-attempt email finder via Apollo.io People Enrichment API — deliberately separate button/cap (max 20) from doc_enrich_emails since Apollo credits are much scarcer
 
 ### Frontend
 - src/pages/Dashboard.tsx     → Centralized queue of pending AI comments
-- src/pages/Contacts.tsx      → CRM pipeline of doctors identified
+- src/pages/Contacts.tsx      → "Scraped Leads" page. CRM pipeline of doctors identified via the scraper, plus one-by-one manually added leads (`source = 'manual'`, via AddContactDialog). Select leads without an email (max 50) to run doc_enrich_emails, or (max 20) to run doc_enrich_emails_apollo as a second attempt; export filtered view to CSV
 - src/pages/Settings.tsx      → Org settings, tone samples, AI prompts
 - src/pages/DmAssistant.tsx   → AI-drafted DM replies/openers for one conversation at a time, backed by doc_dm_drafts history
-- src/pages/Leads.tsx         → Manual notes-based lead list (name/bio/links) feeding DM Assistant context, backed by doc_dm_leads
-- src/pages/Outreach.tsx      → Bulk/personalized LinkedIn outreach: pick doc_contacts or upload CSV/Excel, draft messages, assisted-send (copies message + opens LinkedIn — never sends automatically, per Out of Scope section), logs to doc_outreach_messages
+- src/pages/Leads.tsx         → "Engaged Leads" page. Manually curated lead list (name/bio/LinkedIn URL) feeding DM Assistant context, backed by doc_dm_leads. Has its own status pipeline (pending/messaged/engaged) matching doc_contacts
+- src/pages/Outreach.tsx      → Unified outreach queue merging doc_contacts (scraped + manual) and doc_dm_leads (engaged) into one list, with Scraped/Engaged/Manual Added filter chips. Upload CSV/Excel (rows land in doc_contacts tagged `source = 'manual'`), draft messages (bulk or AI-personalized), assisted-send (copies message + opens LinkedIn — never sends automatically, per Out of Scope section). Logs to doc_outreach_messages against whichever source table (`contact_id` or `dm_lead_id`) the lead came from, and writes status back to that same table — see "Status sync" note under doc_outreach_messages below
 - src/components/QueueItem.tsx→ Comment review UI card with optimistic updates
 
 ### Scripts
@@ -252,6 +260,9 @@ Indexes: doc_comments_user_id_idx, doc_comments_post_id_idx, doc_comments_org_id
 Realtime: Enabled ONLY for `status` column
 
 ### doc_contacts
+"Scraped Leads" page. Also holds one-by-one manually added leads (`source = 'manual'`) and rows
+imported via the Outreach page's CSV/Excel upload (also tagged `source = 'manual'`).
+
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | uuid | PK, default gen_random_uuid() |
@@ -259,13 +270,17 @@ Realtime: Enabled ONLY for `status` column
 | org_id | uuid | FK → doc_organizations, not null |
 | linkedin_profile_url | text | not null |
 | full_name | text | not null |
-| status | text | not null, default 'no_action', check in ('no_action', 'connected', 'replied') |
+| headline | text | |
+| email | text | (written only by doc_enrich_emails / doc_enrich_emails_apollo) |
+| is_connected | boolean | not null, default false |
+| status | text | not null, default 'pending', check in ('pending', 'messaged', 'engaged') |
+| source | text | not null, default 'scraped', check in ('scraped', 'manual') — added in migration 010 |
 | last_contacted_at | timestamptz | |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
 Policies: doc_contacts_select_org, doc_contacts_insert_org, doc_contacts_update_org, doc_contacts_delete_org (all scoped to org membership)
-Indexes: doc_contacts_user_id_idx, doc_contacts_org_id_idx, doc_contacts_status_idx, doc_contacts_org_status_idx
+Indexes: doc_contacts_user_id_idx, doc_contacts_org_id_idx, doc_contacts_status_idx, doc_contacts_org_status_idx, doc_contacts_source_idx
 
 ### doc_tone_samples
 | Column | Type | Constraints |
@@ -283,6 +298,10 @@ Policies: doc_tone_samples_select_org, doc_tone_samples_insert_org, doc_tone_sam
 Indexes: doc_tone_samples_user_id_idx, doc_tone_samples_org_id_idx
 
 ### doc_dm_leads
+"Engaged Leads" page. Manually curated leads with notes/bio, feeding DM Assistant context. Since
+migration 010, also participates in the same status pipeline as doc_contacts so it can be merged
+into the Outreach queue.
+
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | uuid | PK, default gen_random_uuid() |
@@ -291,11 +310,14 @@ Indexes: doc_tone_samples_user_id_idx, doc_tone_samples_org_id_idx
 | name | text | not null |
 | bio | text | |
 | links | text | |
+| linkedin_profile_url | text | added in migration 010 |
+| status | text | not null, default 'pending', check in ('pending', 'messaged', 'engaged') — added in migration 010 |
+| last_contacted_at | timestamptz | added in migration 010 |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
 Policies: doc_dm_leads_select_org, doc_dm_leads_insert_org, doc_dm_leads_update_org, doc_dm_leads_delete_org (all scoped to org membership)
-Indexes: doc_dm_leads_org_id_idx, doc_dm_leads_org_name_idx
+Indexes: doc_dm_leads_org_id_idx, doc_dm_leads_org_name_idx, doc_dm_leads_status_idx, doc_dm_leads_org_status_idx
 
 ### doc_dm_drafts
 | Column | Type | Constraints |
@@ -320,14 +342,25 @@ Notes: History auto-pruned to entries newer than 5 days by the DM Assistant UI o
 | id | uuid | PK, default gen_random_uuid() |
 | user_id | uuid | FK → auth.users, not null, default auth.uid() |
 | org_id | uuid | FK → doc_organizations, not null |
-| contact_id | uuid | FK → doc_contacts, not null, on delete cascade |
+| contact_id | uuid | FK → doc_contacts, nullable, on delete cascade — nullable since migration 010 |
+| dm_lead_id | uuid | FK → doc_dm_leads, nullable, on delete cascade — added in migration 010 |
 | message_content | text | not null |
 | sent_at | timestamptz | not null, default now() |
 | created_at | timestamptz | not null, default now() |
 
+Constraint: `doc_outreach_messages_exactly_one_target` — exactly one of `contact_id` / `dm_lead_id` must be set (never both, never neither), since migration 010 lets a logged message point at either source table.
 Policies: doc_outreach_messages_select_org, doc_outreach_messages_insert_org, doc_outreach_messages_update_org, doc_outreach_messages_delete_org (all scoped to org membership)
-Indexes: doc_outreach_messages_org_id_idx, doc_outreach_messages_contact_id_idx, doc_outreach_messages_user_id_idx, doc_outreach_messages_contact_sent_idx
+Indexes: doc_outreach_messages_org_id_idx, doc_outreach_messages_contact_id_idx, doc_outreach_messages_user_id_idx, doc_outreach_messages_contact_sent_idx, doc_outreach_messages_dm_lead_id_idx
 Notes: Logs what was sent via the Outreach page's assisted-send flow (copy message + open LinkedIn manually). Written client-side after the user confirms they sent the message — the app never sends anything to LinkedIn itself, per the Out of Scope section.
+
+**Status sync across the app**: doc_contacts and doc_dm_leads share the same status vocabulary
+(`pending` / `messaged` / `engaged`). The Scraped Leads, Engaged Leads, and Outreach pages all query
+these tables under the identical React Query keys (`["contacts", orgId]` / `["dm-leads", orgId]`).
+Any mutation that changes a lead's status invalidates the query key for its source table; every
+mounted page sharing that key refetches automatically, so a status change made on any one page
+(e.g. marking a lead "messaged" from Outreach) is reflected everywhere else without a manual
+refresh. When adding a new status-changing mutation, invalidate the matching key — don't invent a
+new query key for the same underlying table.
 
 ### Storage Buckets
 - `doc_tone_uploads` (Private). Paths format: `/{org_id}/{uuid}.{ext}`
@@ -458,6 +491,68 @@ Notes: Logs what was sent via the Outreach page's assisted-send flow (copy messa
   return a "successful" run with 0 items — the response includes `run_url` and a `warning` string
   so this is visible in the UI instead of silently returning zero saved leads.
 
+### doc_enrich_emails
+- Method: POST
+- Rate limit tier: expensive
+- Input schema:
+  ```typescript
+  z.object({
+    org_id: z.string().uuid(),
+    contact_ids: z.array(z.string().uuid()).min(1).max(50),
+  })
+  ```
+- Success response (200):
+  ```json
+  { "data": { "requested": number, "found": number, "run_url": "string", "warning": "string | null" } }
+  ```
+- Error responses:
+  - 400: Invalid input / no matching contacts
+  - 401: Missing/invalid JWT
+  - 429: Rate limit exceeded
+  - 500: Sanitized message (e.g. Apify key not configured, Apify run failed)
+  - 504: Search timed out (120s poll budget)
+- Tables touched: doc_contacts (READ/WRITE — writes only the `email` column)
+- External calls: Apify (`harvestapi~linkedin-profile-scraper` actor, `profileScraperMode: "Profile details + email search ($10 per 1k)"`) — see Section 6.5
+- Notes: A second, separate Apify actor from the one used by `doc_scrape_post_commenters`. LinkedIn does
+  not publish email addresses on profiles — this actor performs an independent search/verification
+  (SMTP checks per vendor docs) and explicitly does not guarantee finding an email for every profile.
+  Treat results as partial coverage, not a guarantee. Capped at 50 contacts per call to bound cost/time;
+  callers must re-invoke for additional batches. Matches results back to contacts by normalized
+  LinkedIn URL. Response includes `run_url` so a zero-result run can be inspected directly in Apify's
+  console, same diagnostic pattern as `doc_scrape_post_commenters`.
+
+### doc_enrich_emails_apollo
+- Method: POST
+- Rate limit tier: expensive
+- Input schema:
+  ```typescript
+  z.object({
+    org_id: z.string().uuid(),
+    contact_ids: z.array(z.string().uuid()).min(1).max(20),
+  })
+  ```
+- Success response (200):
+  ```json
+  { "data": { "requested": number, "found": number, "warning": "string | null" } }
+  ```
+- Error responses:
+  - 400: Invalid input / no matching contacts
+  - 401: Missing/invalid JWT
+  - 429: Rate limit exceeded
+  - 500: Sanitized message (e.g. Apollo key not configured)
+- Tables touched: doc_contacts (READ/WRITE — writes only the `email` column)
+- External calls: Apollo.io People Enrichment API — see Section 6.5
+- Notes: A deliberate second attempt, separate from `doc_enrich_emails`, meant to be triggered manually
+  on leads the first (Apify-based) search already came up empty on — never chained automatically, since
+  Apollo credits are far scarcer (org's plan: 75/month) than the Apify-based tool's budget. Capped at 20
+  contacts per call (vs. 50 for `doc_enrich_emails`) for the same reason. Calls the single-person
+  enrichment endpoint once per contact sequentially (not the bulk endpoint) with a small delay between
+  calls to stay under Apollo's rate limit; stops the batch early on a 429 rather than failing the whole
+  request. `reveal_personal_emails: true` is required for Apollo to return an email at all — without it,
+  the call succeeds but never includes contact info. Response parsing checks a couple of likely paths for
+  the email field defensively, since the exact 200-response shape wasn't fully visible in Apollo's
+  interactive docs when this was built — worth double-checking against a real response on first use.
+
 ### doc_generate_dm
 - Method: POST
 - Rate limit tier: expensive
@@ -560,6 +655,74 @@ await fetch(runUrl, {
 - Rename the `posts` / `maxItems` fields without checking the actor's current input schema first
   — an unrecognized field name fails silently (the run "succeeds" with 0 items) rather than erroring
 
+### Apify (HarvestAPI linkedin-profile-scraper actor — email enrichment)
+- Research source: https://apify.com/harvestapi/linkedin-profile-scraper/api/openapi
+- Base URL: `https://api.apify.com/v2/`
+- Auth method: same `APIFY_API_KEY` as above, reused across both actors
+- Called from edge function(s): `doc_enrich_emails`
+- Trigger: User action ("Find Emails for Selected" button on Outreach page)
+- Rate limit: Apify plan-dependent; app-side limited by the `expensive` rate limit tier
+
+**Outbound request shape (start run):**
+```typescript
+const runUrl = `https://api.apify.com/v2/acts/harvestapi~linkedin-profile-scraper/runs?token=${apifyToken}&waitForFinish=0`;
+await fetch(runUrl, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    urls: [...profileUrls],
+    // Exact enum string required by this actor's own schema — includes the price, unusually:
+    profileScraperMode: "Profile details + email search ($10 per 1k)",
+  }),
+});
+```
+
+**Never:**
+- Call this API from the frontend
+- Expose the credential in any response body or log
+- Assume this will find an email for every profile — the vendor's own docs state it's not
+  guaranteed; this is independent search/verification, not extraction of published data
+- Change the `profileScraperMode` enum string without re-checking the actor's schema — it's
+  matched exactly, price suffix included
+
+### Apollo.io (People Enrichment API)
+- Research source: https://docs.apollo.io/reference/authentication (auth) + https://docs.apollo.io/reference/people-enrichment (endpoint)
+- Base URL: `https://api.apollo.io/api/v1/`
+- Auth method: `x-api-key` header — NOT `Authorization: Bearer`. The People Enrichment doc page's
+  interactive "Credentials: Bearer" label is generic UI chrome from their docs tool, not the actual
+  requirement; the dedicated Authentication reference page is authoritative and confirms `x-api-key`.
+  Got this wrong on the first build (every request 401'd) — fixed after checking the right page.
+- Secret name: `APOLLO_API_KEY` (stored in Supabase Vault)
+- Called from edge function(s): `doc_enrich_emails_apollo`
+- Trigger: User action ("Try Apollo" button on Contacts page — deliberately separate from "Find Emails")
+- Rate limit: Apollo plan-dependent (429 on excess); org's plan has 75 credits/month, so app-side this is
+  used sparingly and capped at 20 contacts per call
+
+**Outbound request shape:**
+```typescript
+const response = await fetch("https://api.apollo.io/api/v1/people/match", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "x-api-key": Deno.env.get("APOLLO_API_KEY")!,
+  },
+  body: JSON.stringify({
+    linkedin_url: contact.linkedin_profile_url,
+    reveal_personal_emails: true, // required — omitting this returns no contact info at all
+  }),
+});
+```
+
+**Never:**
+- Call this API from the frontend
+- Expose the credential in any response body or log
+- Use `run_waterfall_email`/`run_waterfall_phone` without also implementing the required webhook
+  receiver — those parameters make the call asynchronous and need a public HTTPS callback URL,
+  which isn't built yet. The current integration only uses the synchronous `reveal_personal_emails`
+  path.
+- Assume Apollo will find an email for every profile — same caveat as the Apify-based tool
+
 ### OpenAI
 - Research source: https://platform.openai.com/docs/api-reference/chat
 - Base URL: `https://api.openai.com/v1/`
@@ -622,6 +785,7 @@ if (response.status >= 500) {
 | MAKE_WEBHOOK_SECRET | Make.com Webhook authentication | PRD Section 4 |
 | OPENAI_API_KEY | OpenAI API authentication | PRD Section 4 |
 | APIFY_API_KEY | Apify API authentication (lead scraper) | scripts/setup-integrations.md |
+| APOLLO_API_KEY | Apollo.io API authentication (second-attempt email finder) | scripts/setup-integrations.md |
 
 ### NEVER expose in frontend or edge function responses:
 | Variable | Why |
@@ -630,6 +794,7 @@ if (response.status >= 500) {
 | MAKE_WEBHOOK_SECRET | Exposes internal logic bridge |
 | OPENAI_API_KEY | Exposes vendor credentials |
 | APIFY_API_KEY | Exposes vendor credentials |
+| APOLLO_API_KEY | Exposes vendor credentials |
 
 ## Auth Settings
 

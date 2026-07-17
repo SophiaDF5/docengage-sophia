@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import Papa from "papaparse";
 import { supabase } from "../lib/supabaseClient";
 import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
@@ -30,8 +31,32 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { Skeleton } from "../components/ui/skeleton";
-import { ExternalLink, ChevronDown, Search, Loader2 } from "lucide-react";
+import { ExternalLink, ChevronDown, Search, Loader2, Sparkles, Download, Plus } from "lucide-react";
 import type { Contact, ContactStatus } from "../types/database";
+
+const MAX_EMAIL_SEARCH_SELECTION = 50;
+
+function exportContactsCsv(list: Contact[]) {
+  const rows = list.map((c) => ({
+    name: c.full_name,
+    source: c.source,
+    headline: c.headline ?? "",
+    linkedin_url: c.linkedin_profile_url,
+    email: c.email ?? "",
+    connected: c.is_connected ? "yes" : "no",
+    status: c.status,
+    last_contacted_at: c.last_contacted_at ?? "",
+    added_at: c.created_at,
+  }));
+  const csv = Papa.unparse(rows);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `contacts-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 const STATUS_OPTIONS: { value: ContactStatus; label: string }[] = [
   { value: "pending", label: "Pending" },
@@ -54,6 +79,7 @@ export function Contacts() {
   const { currentOrgId } = useOrganization();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<ContactStatus | "all">("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const contactsQuery = useQuery({
     queryKey: ["contacts", currentOrgId],
@@ -61,7 +87,7 @@ export function Contacts() {
       if (!currentOrgId) return [];
       const { data, error } = await supabase
         .from("doc_contacts")
-        .select("id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, last_contacted_at, created_at, updated_at")
+        .select("id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, last_contacted_at, created_at, updated_at")
         .eq("org_id", currentOrgId)
         .order("created_at", { ascending: false });
 
@@ -105,6 +131,75 @@ export function Contacts() {
     },
   });
 
+  function toggleSelect(contact: Contact) {
+    if (contact.email) return; // no need to search — already has an email
+
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(contact.id)) {
+        next.delete(contact.id);
+        return next;
+      }
+      if (next.size >= MAX_EMAIL_SEARCH_SELECTION) {
+        toast.error(`You can only select up to ${MAX_EMAIL_SEARCH_SELECTION} leads at a time for email search.`);
+        return prev;
+      }
+      next.add(contact.id);
+      return next;
+    });
+  }
+
+  const enrichEmailsMutation = useMutation({
+    mutationFn: async () => {
+      return callEdgeFunction<{
+        data: { requested: number; found: number; run_url: string; warning: string | null };
+      }>("doc_enrich_emails", {
+        org_id: currentOrgId,
+        contact_ids: Array.from(selectedIds),
+      });
+    },
+    onSuccess: (result) => {
+      const { requested, found, run_url, warning } = result.data;
+      if (found === 0 && warning) {
+        toast.warning(warning, {
+          duration: 12000,
+          action: { label: "View run", onClick: () => window.open(run_url, "_blank") },
+        });
+      } else {
+        toast.success(`Found ${found} of ${requested} email${requested === 1 ? "" : "s"}`);
+      }
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["contacts", currentOrgId] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Email search failed");
+    },
+  });
+
+  const enrichEmailsApolloMutation = useMutation({
+    mutationFn: async () => {
+      return callEdgeFunction<{
+        data: { requested: number; found: number; warning: string | null };
+      }>("doc_enrich_emails_apollo", {
+        org_id: currentOrgId,
+        contact_ids: Array.from(selectedIds).slice(0, 20),
+      });
+    },
+    onSuccess: (result) => {
+      const { requested, found, warning } = result.data;
+      if (found === 0 && warning) {
+        toast.warning(warning, { duration: 12000 });
+      } else {
+        toast.success(`Apollo found ${found} of ${requested} email${requested === 1 ? "" : "s"}`);
+      }
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["contacts", currentOrgId] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Apollo search failed");
+    },
+  });
+
   if (!currentOrgId) {
     return (
       <div className="text-center py-12 text-muted-foreground">
@@ -131,13 +226,60 @@ export function Contacts() {
     <div className="space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Scraped Leads</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {contacts.length} contact{contacts.length === 1 ? "" : "s"} in pipeline
           </p>
         </div>
-        <ScrapeDialog orgId={currentOrgId} />
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => exportContactsCsv(filtered)}
+            disabled={filtered.length === 0}
+          >
+            <Download className="h-4 w-4 mr-1" />
+            Export {statusFilter === "all" ? "All" : ""} ({filtered.length})
+          </Button>
+          {selectedIds.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => enrichEmailsMutation.mutate()}
+              disabled={enrichEmailsMutation.isPending}
+            >
+              {enrichEmailsMutation.isPending ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Searching...</>
+              ) : (
+                <><Sparkles className="h-4 w-4 mr-1" /> Find Emails ({selectedIds.size})</>
+              )}
+            </Button>
+          )}
+          {selectedIds.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => enrichEmailsApolloMutation.mutate()}
+              disabled={enrichEmailsApolloMutation.isPending}
+              title="Uses Apollo credits (limited monthly budget) — use for leads Find Emails already came up empty on"
+            >
+              {enrichEmailsApolloMutation.isPending ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Searching...</>
+              ) : (
+                <><Sparkles className="h-4 w-4 mr-1" /> Try Apollo ({Math.min(selectedIds.size, 20)})</>
+              )}
+            </Button>
+          )}
+          <AddContactDialog orgId={currentOrgId} />
+          <ScrapeDialog orgId={currentOrgId} />
+        </div>
       </div>
+      {selectedIds.size > 20 && (
+        <p className="text-xs text-amber-600 -mt-4">
+          "Try Apollo" only processes the first 20 selected leads per click — your Apollo plan has a
+          limited monthly credit budget, so this is capped lower than "Find Emails" on purpose.
+        </p>
+      )}
 
       {/* Status filters */}
       <div className="flex gap-2">
@@ -180,8 +322,11 @@ export function Contacts() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-8"></TableHead>
                 <TableHead>Name</TableHead>
+                <TableHead>Source</TableHead>
                 <TableHead>Headline</TableHead>
+                <TableHead>Email</TableHead>
                 <TableHead>Connected</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Last Contacted</TableHead>
@@ -192,11 +337,29 @@ export function Contacts() {
             <TableBody>
               {filtered.map((contact) => (
                 <TableRow key={contact.id}>
+                  <TableCell>
+                    {contact.email ? (
+                      <span className="text-xs text-muted-foreground" title="Already has an email">✓</span>
+                    ) : (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(contact.id)}
+                        onChange={() => toggleSelect(contact)}
+                        className="h-4 w-4 rounded border-border"
+                      />
+                    )}
+                  </TableCell>
                   <TableCell className="font-medium">
                     {contact.full_name}
                   </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="capitalize">{contact.source}</Badge>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground truncate max-w-48">
                     {contact.headline ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {contact.email ?? "—"}
                   </TableCell>
                   <TableCell>
                     <DropdownMenu>
@@ -285,6 +448,91 @@ export function Contacts() {
         </div>
       )}
     </div>
+  );
+}
+
+function AddContactDialog({ orgId }: { orgId: string }) {
+  const [open, setOpen] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [linkedinUrl, setLinkedinUrl] = useState("");
+  const [headline, setHeadline] = useState("");
+  const queryClient = useQueryClient();
+
+  const addMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.from("doc_contacts").insert({
+        org_id: orgId,
+        full_name: fullName.trim(),
+        linkedin_profile_url: linkedinUrl.trim(),
+        headline: headline.trim() || null,
+        source: "manual",
+        status: "pending",
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Lead added");
+      setOpen(false);
+      setFullName("");
+      setLinkedinUrl("");
+      setHeadline("");
+      queryClient.invalidateQueries({ queryKey: ["contacts", orgId] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to add lead");
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<Button variant="outline" size="sm" />}>
+        <Plus className="h-4 w-4 mr-1" />
+        Add Lead
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add a Lead Manually</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 pt-2">
+          <div className="space-y-2">
+            <Label>Name</Label>
+            <Input
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Dr. Jane Smith"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>LinkedIn Profile URL</Label>
+            <Input
+              value={linkedinUrl}
+              onChange={(e) => setLinkedinUrl(e.target.value)}
+              placeholder="https://linkedin.com/in/..."
+              type="url"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Headline (optional)</Label>
+            <Input
+              value={headline}
+              onChange={(e) => setHeadline(e.target.value)}
+              placeholder="Cardiologist at..."
+            />
+          </div>
+          <Button
+            className="w-full"
+            onClick={() => addMutation.mutate()}
+            disabled={!fullName.trim() || !linkedinUrl.trim() || addMutation.isPending}
+          >
+            {addMutation.isPending ? (
+              <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Adding...</>
+            ) : (
+              "Add Lead"
+            )}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

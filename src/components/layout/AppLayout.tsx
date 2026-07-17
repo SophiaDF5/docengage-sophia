@@ -23,8 +23,8 @@ import { cn } from "../../lib/utils";
 const navItems = [
   { path: "/", label: "Comments", icon: MessageSquare },
   { path: "/dm", label: "DM Assistant", icon: Mail },
-  { path: "/leads", label: "Leads", icon: UserCircle },
-  { path: "/contacts", label: "Contacts", icon: Users },
+  { path: "/leads", label: "Engaged Leads", icon: UserCircle },
+  { path: "/contacts", label: "Scraped Leads", icon: Users },
   { path: "/outreach", label: "Outreach", icon: Send },
   { path: "/settings", label: "Settings", icon: Settings },
 ];

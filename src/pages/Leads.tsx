@@ -3,13 +3,32 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabaseClient";
 import { useOrganization } from "../hooks/useOrganization";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
-import { Loader2, Pencil, Plus, Trash2, UserCircle } from "lucide-react";
-import type { DmLead } from "../types/database";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import { ChevronDown, ExternalLink, Loader2, Pencil, Plus, Trash2, UserCircle } from "lucide-react";
+import type { ContactStatus, DmLead } from "../types/database";
+
+const STATUS_OPTIONS: { value: ContactStatus; label: string }[] = [
+  { value: "pending", label: "Pending" },
+  { value: "messaged", label: "Messaged" },
+  { value: "engaged", label: "Engaged" },
+];
+
+const statusBadgeVariant: Record<ContactStatus, "outline" | "default" | "secondary"> = {
+  pending: "outline",
+  messaged: "default",
+  engaged: "secondary",
+};
 
 export function Leads() {
   const { currentOrgId } = useOrganization();
@@ -19,7 +38,7 @@ export function Leads() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [bio, setBio] = useState("");
-  const [links, setLinks] = useState("");
+  const [linkedinUrl, setLinkedinUrl] = useState("");
 
   const leadsQuery = useQuery({
     queryKey: ["dm-leads", currentOrgId],
@@ -42,13 +61,21 @@ export function Leads() {
       if (editingId) {
         const { error } = await supabase
           .from("doc_dm_leads")
-          .update({ name, bio: bio || null, links: links || null })
+          .update({
+            name,
+            bio: bio || null,
+            linkedin_profile_url: linkedinUrl || null,
+          })
           .eq("id", editingId);
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("doc_dm_leads")
-          .insert({ org_id: currentOrgId!, name, bio: bio || null, links: links || null });
+        const { error } = await supabase.from("doc_dm_leads").insert({
+          org_id: currentOrgId!,
+          name,
+          bio: bio || null,
+          linkedin_profile_url: linkedinUrl || null,
+          status: "pending",
+        });
         if (error) throw error;
       }
     },
@@ -72,19 +99,33 @@ export function Leads() {
     onError: () => toast.error("Failed to delete lead"),
   });
 
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: ContactStatus }) => {
+      const { error } = await supabase
+        .from("doc_dm_leads")
+        .update({ status, last_contacted_at: status === "messaged" ? new Date().toISOString() : undefined })
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dm-leads", currentOrgId] });
+    },
+    onError: () => toast.error("Failed to update status"),
+  });
+
   function resetForm() {
     setShowForm(false);
     setEditingId(null);
     setName("");
     setBio("");
-    setLinks("");
+    setLinkedinUrl("");
   }
 
   function startEdit(lead: DmLead) {
     setEditingId(lead.id);
     setName(lead.name);
     setBio(lead.bio || "");
-    setLinks(lead.links || "");
+    setLinkedinUrl(lead.linkedin_profile_url || "");
     setShowForm(true);
   }
 
@@ -100,7 +141,7 @@ export function Leads() {
     <div className="space-y-8 max-w-3xl">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Saved Leads</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Engaged Leads</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Doctors and contacts you message regularly.
           </p>
@@ -130,9 +171,10 @@ export function Leads() {
               <div className="space-y-1">
                 <Label>LinkedIn URL</Label>
                 <Input
-                  value={links}
-                  onChange={(e) => setLinks(e.target.value)}
+                  value={linkedinUrl}
+                  onChange={(e) => setLinkedinUrl(e.target.value)}
                   placeholder="https://linkedin.com/in/..."
+                  type="url"
                 />
               </div>
             </div>
@@ -176,21 +218,43 @@ export function Leads() {
               <CardContent className="pt-4 flex items-start justify-between gap-4">
                 <div className="min-w-0 space-y-0.5">
                   <p className="font-medium">{lead.name}</p>
-                  {lead.links && (
+                  {lead.linkedin_profile_url && (
                     <a
-                      href={lead.links.startsWith("http") ? lead.links : `https://${lead.links}`}
+                      href={lead.linkedin_profile_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-blue-500 hover:underline truncate block"
+                      className="text-xs text-blue-500 hover:underline inline-flex items-center gap-1"
                     >
-                      {lead.links}
+                      Profile <ExternalLink className="h-3 w-3" />
                     </a>
                   )}
                   {lead.bio && (
                     <p className="text-sm text-muted-foreground">{lead.bio}</p>
                   )}
                 </div>
-                <div className="flex gap-1 shrink-0">
+                <div className="flex items-center gap-1 shrink-0">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={<Button variant="ghost" size="sm" className="gap-1 h-7" />}
+                    >
+                      <Badge variant={statusBadgeVariant[lead.status]}>
+                        {lead.status.charAt(0).toUpperCase() + lead.status.slice(1)}
+                      </Badge>
+                      <ChevronDown className="h-3 w-3" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent>
+                      {STATUS_OPTIONS.map((opt) => (
+                        <DropdownMenuItem
+                          key={opt.value}
+                          onSelect={() =>
+                            updateStatusMutation.mutate({ id: lead.id, status: opt.value })
+                          }
+                        >
+                          {opt.label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <Button
                     variant="ghost"
                     size="sm"
