@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import Papa from "papaparse";
@@ -31,7 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { Skeleton } from "../components/ui/skeleton";
-import { ExternalLink, ChevronDown, Search, Loader2, Sparkles, Download, Plus } from "lucide-react";
+import { ExternalLink, ChevronDown, Search, Loader2, Sparkles, Download } from "lucide-react";
 import type { Contact, ContactStatus } from "../types/database";
 
 const MAX_EMAIL_SEARCH_SELECTION = 50;
@@ -95,7 +95,21 @@ export function Contacts() {
       return data as Contact[];
     },
     enabled: !!currentOrgId,
+    retry: 1,
   });
+
+  // Surface load failures instead of silently showing an empty list — the
+  // most common cause is a pending DB migration (a selected column that
+  // doesn't exist yet on the live database).
+  useEffect(() => {
+    if (contactsQuery.error) {
+      toast.error(
+        contactsQuery.error instanceof Error
+          ? `Failed to load leads: ${contactsQuery.error.message}`
+          : "Failed to load leads"
+      );
+    }
+  }, [contactsQuery.error]);
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ contactId, status }: { contactId: string; status: ContactStatus }) => {
@@ -208,7 +222,10 @@ export function Contacts() {
     );
   }
 
-  const contacts = contactsQuery.data ?? [];
+  // This page is "Scraped Leads" specifically — manually added leads (via
+  // Add Lead or CSV upload) live on the Manual Added Leads page instead.
+  // Both still share the ["contacts", orgId] query cache/key for status sync.
+  const contacts = (contactsQuery.data ?? []).filter((c) => c.source === "scraped");
   const filtered =
     statusFilter === "all"
       ? contacts
@@ -270,7 +287,6 @@ export function Contacts() {
               )}
             </Button>
           )}
-          <AddContactDialog orgId={currentOrgId} />
           <ScrapeDialog orgId={currentOrgId} />
         </div>
       </div>
@@ -324,7 +340,6 @@ export function Contacts() {
               <TableRow>
                 <TableHead className="w-8"></TableHead>
                 <TableHead>Name</TableHead>
-                <TableHead>Source</TableHead>
                 <TableHead>Headline</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Connected</TableHead>
@@ -351,9 +366,6 @@ export function Contacts() {
                   </TableCell>
                   <TableCell className="font-medium">
                     {contact.full_name}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="capitalize">{contact.source}</Badge>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground truncate max-w-48">
                     {contact.headline ?? "—"}
@@ -448,91 +460,6 @@ export function Contacts() {
         </div>
       )}
     </div>
-  );
-}
-
-function AddContactDialog({ orgId }: { orgId: string }) {
-  const [open, setOpen] = useState(false);
-  const [fullName, setFullName] = useState("");
-  const [linkedinUrl, setLinkedinUrl] = useState("");
-  const [headline, setHeadline] = useState("");
-  const queryClient = useQueryClient();
-
-  const addMutation = useMutation({
-    mutationFn: async () => {
-      const { error } = await supabase.from("doc_contacts").insert({
-        org_id: orgId,
-        full_name: fullName.trim(),
-        linkedin_profile_url: linkedinUrl.trim(),
-        headline: headline.trim() || null,
-        source: "manual",
-        status: "pending",
-      });
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      toast.success("Lead added");
-      setOpen(false);
-      setFullName("");
-      setLinkedinUrl("");
-      setHeadline("");
-      queryClient.invalidateQueries({ queryKey: ["contacts", orgId] });
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Failed to add lead");
-    },
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="outline" size="sm" />}>
-        <Plus className="h-4 w-4 mr-1" />
-        Add Lead
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add a Lead Manually</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 pt-2">
-          <div className="space-y-2">
-            <Label>Name</Label>
-            <Input
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="Dr. Jane Smith"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>LinkedIn Profile URL</Label>
-            <Input
-              value={linkedinUrl}
-              onChange={(e) => setLinkedinUrl(e.target.value)}
-              placeholder="https://linkedin.com/in/..."
-              type="url"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Headline (optional)</Label>
-            <Input
-              value={headline}
-              onChange={(e) => setHeadline(e.target.value)}
-              placeholder="Cardiologist at..."
-            />
-          </div>
-          <Button
-            className="w-full"
-            onClick={() => addMutation.mutate()}
-            disabled={!fullName.trim() || !linkedinUrl.trim() || addMutation.isPending}
-          >
-            {addMutation.isPending ? (
-              <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Adding...</>
-            ) : (
-              "Add Lead"
-            )}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }
 

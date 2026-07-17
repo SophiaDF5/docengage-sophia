@@ -170,11 +170,14 @@ Run these commands in order. Do not skip any step.
 
 ### Frontend
 - src/pages/Dashboard.tsx     → Centralized queue of pending AI comments
-- src/pages/Contacts.tsx      → "Scraped Leads" page. CRM pipeline of doctors identified via the scraper, plus one-by-one manually added leads (`source = 'manual'`, via AddContactDialog). Select leads without an email (max 50) to run doc_enrich_emails, or (max 20) to run doc_enrich_emails_apollo as a second attempt; export filtered view to CSV
+- src/pages/Contacts.tsx      → "Scraped Leads" page. CRM pipeline of doctors identified via the scraper only (`source = 'scraped'`). Manually added leads live on the Manual Added Leads page instead, though both read/write the same doc_contacts table and `["contacts", orgId]` query key. Select leads without an email (max 50) to run doc_enrich_emails, or (max 20) to run doc_enrich_emails_apollo as a second attempt; export filtered view to CSV
+- src/pages/ManualLeads.tsx   → "Manual Added Leads" page. Shows doc_contacts rows where `source = 'manual'` — added one-by-one via AddContactDialog, or via CSV/Excel upload on the Outreach page. Supports status changes, delete, and the same email-enrichment (Find Emails) flow as Scraped Leads. Shares the `["contacts", orgId]` query key so status stays in sync with Scraped Leads and Outreach.
 - src/pages/Settings.tsx      → Org settings, tone samples, AI prompts
 - src/pages/DmAssistant.tsx   → AI-drafted DM replies/openers for one conversation at a time, backed by doc_dm_drafts history
 - src/pages/Leads.tsx         → "Engaged Leads" page. Manually curated lead list (name/bio/LinkedIn URL) feeding DM Assistant context, backed by doc_dm_leads. Has its own status pipeline (pending/messaged/engaged) matching doc_contacts
 - src/pages/Outreach.tsx      → Unified outreach queue merging doc_contacts (scraped + manual) and doc_dm_leads (engaged) into one list, with Scraped/Engaged/Manual Added filter chips. Upload CSV/Excel (rows land in doc_contacts tagged `source = 'manual'`), draft messages (bulk or AI-personalized), assisted-send (copies message + opens LinkedIn — never sends automatically, per Out of Scope section). Logs to doc_outreach_messages against whichever source table (`contact_id` or `dm_lead_id`) the lead came from, and writes status back to that same table — see "Status sync" note under doc_outreach_messages below
+- src/components/AddContactDialog.tsx → Shared "Add Lead" dialog (name/LinkedIn URL/headline), inserts into doc_contacts with `source = 'manual'`. Currently only used by the Manual Added Leads page — kept as its own component so the insert shape can't drift if it's ever wired into another page too.
+- src/components/ErrorBoundary.tsx → Top-level React error boundary wrapping the router in App.tsx. Without it, any uncaught render error (bad query, null dereference, a bug in a new page) unmounts the whole tree and leaves a blank white screen with no message — this catches it and shows a real error + reload option instead.
 - src/components/QueueItem.tsx→ Comment review UI card with optimistic updates
 
 ### Scripts

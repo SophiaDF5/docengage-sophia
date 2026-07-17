@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabaseClient";
@@ -52,7 +52,18 @@ export function Leads() {
       return data as DmLead[];
     },
     enabled: !!currentOrgId,
+    retry: 1,
   });
+
+  useEffect(() => {
+    if (leadsQuery.error) {
+      toast.error(
+        leadsQuery.error instanceof Error
+          ? `Failed to load leads: ${leadsQuery.error.message}`
+          : "Failed to load leads"
+      );
+    }
+  }, [leadsQuery.error]);
 
   const leads = leadsQuery.data ?? [];
 

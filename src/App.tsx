@@ -3,12 +3,15 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { queryClient } from "./lib/queryClient";
 import { useAuth } from "./hooks/useAuth";
+import { supabaseConfigError } from "./lib/supabaseClient";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppLayout } from "./components/layout/AppLayout";
 import { Login } from "./pages/auth/Login";
 import { CommentGenerator } from "./pages/CommentGenerator";
 import { DmAssistant } from "./pages/DmAssistant";
 import { Leads } from "./pages/Leads";
 import { Contacts } from "./pages/Contacts";
+import { ManualLeads } from "./pages/ManualLeads";
 import { Outreach } from "./pages/Outreach";
 import { Settings } from "./pages/Settings";
 
@@ -58,6 +61,7 @@ function AppRoutes() {
         <Route path="/dm" element={<DmAssistant />} />
         <Route path="/leads" element={<Leads />} />
         <Route path="/contacts" element={<Contacts />} />
+        <Route path="/manual-leads" element={<ManualLeads />} />
         <Route path="/outreach" element={<Outreach />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
@@ -67,13 +71,26 @@ function AppRoutes() {
 }
 
 function App() {
+  if (supabaseConfigError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background px-4">
+        <div className="max-w-md text-center space-y-3">
+          <p className="text-lg font-semibold">Configuration error</p>
+          <p className="text-sm text-muted-foreground">{supabaseConfigError}</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AppRoutes />
-        <Toaster position="bottom-right" />
-      </BrowserRouter>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <AppRoutes />
+          <Toaster position="bottom-right" />
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

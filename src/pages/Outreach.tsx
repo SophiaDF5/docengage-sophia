@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import Papa from "papaparse";
@@ -140,6 +140,7 @@ export function Outreach() {
       return data as Contact[];
     },
     enabled: !!currentOrgId,
+    retry: 1,
   });
 
   const dmLeadsQuery = useQuery({
@@ -155,7 +156,15 @@ export function Outreach() {
       return data as DmLead[];
     },
     enabled: !!currentOrgId,
+    retry: 1,
   });
+
+  useEffect(() => {
+    if (contactsQuery.error || dmLeadsQuery.error) {
+      const err = contactsQuery.error ?? dmLeadsQuery.error;
+      toast.error(err instanceof Error ? `Failed to load leads: ${err.message}` : "Failed to load leads");
+    }
+  }, [contactsQuery.error, dmLeadsQuery.error]);
 
   const isLoading = contactsQuery.isLoading || dmLeadsQuery.isLoading;
 
