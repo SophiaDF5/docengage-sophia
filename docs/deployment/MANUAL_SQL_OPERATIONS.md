@@ -6,7 +6,7 @@ before deploying. Check each item after running it.
 ## Right now (pending as of 2026-07-17, updated)
 
 Your production project has migrations through `009_outreach_messages.sql` applied. Run the
-following three migrations **in this exact order**, in one SQL Editor session, then deploy edge
+following four migrations **in this exact order**, in one SQL Editor session, then deploy edge
 functions and the frontend:
 
 - [ ] **Migration 010** — adds `source` to `doc_contacts`, adds `status`/`linkedin_profile_url`/
@@ -17,12 +17,16 @@ functions and the frontend:
 - [ ] **Migration 012 — biggest one: removes the organization/team concept entirely.** Every
   login becomes its own fully isolated account — no org switching, no inviting teammates, no
   roles. Check for duplicate account rows first (see below) before running this one.
+- [ ] **Migration 013** — adds a `tag` column to `doc_contacts` (freeform label like "YouTube" set
+  when uploading/adding a lead). Without this, the Manual Added Leads page's upload dialog and
+  filter chips fail.
 - [ ] Deploy edge functions (see "Deploy edge functions" below) — `doc_enrich_emails` and
   `doc_enrich_emails_apollo` are new since your last deploy, `doc_scrape_post_commenters` /
   `doc_inbound_post` had fixes, and `doc_invite_member` was deleted.
 - [ ] Confirm `APOLLO_API_KEY` secret is set if you want "Try Apollo" to work.
 - [ ] Redeploy the frontend (`dist` folder) to Netlify — the version currently live predates the
-  SPA reload fix, the white-screen hardening, and the account-model change.
+  SPA reload fix, the white-screen hardening, the account-model change, and the lead-tag/upload
+  relocation (CSV/Excel upload moved from Outreach to Manual Added Leads).
 
 ### Migration 010 — paste this into the SQL Editor
 
@@ -194,6 +198,25 @@ select tgname from pg_trigger where tgname = 'doc_on_auth_user_created';
 -- should return one row
 ```
 
+### Migration 013 — paste this into the SQL Editor, right after 012
+
+```sql
+begin;
+
+alter table public.doc_contacts
+  add column if not exists tag text;
+
+create index if not exists doc_contacts_tag_idx on public.doc_contacts(tag);
+
+commit;
+```
+
+Verify with:
+```sql
+select column_name from information_schema.columns
+where table_name = 'doc_contacts' and column_name = 'tag';
+```
+
 ## Deploy edge functions
 
 Run these from the project root on your own machine (not in this chat — CLI auth tokens should
@@ -259,12 +282,15 @@ without them, the build produces a broken bundle (this was one of the causes of 
   originated from (e.g. Scraped Leads or Engaged Leads) without a manual refresh.
 - [ ] Settings page shows "Account" (not "Organization") and has no Team Members section.
 - [ ] Top nav bar has no org-switcher dropdown.
+- [ ] Outreach page's "1. Choose your leads" step has no upload button — only filter chips.
+- [ ] On Manual Added Leads, click "Upload Leads", type a tag (e.g. "Test"), upload a small
+  CSV/Excel, confirm the leads import and a matching filter chip appears automatically.
 
 ## Production (original checklist — already applied)
 
 - [x] Run `supabase/migrations/001_initial_schema.sql` through `009_outreach_messages.sql`
-- [ ] Run `supabase/migrations/010_unify_lead_sources.sql`, `011_add_custom_fields.sql`, and
-  `012_remove_org_teams.sql` — see "Right now" above
+- [ ] Run `supabase/migrations/010_unify_lead_sources.sql`, `011_add_custom_fields.sql`,
+  `012_remove_org_teams.sql`, and `013_add_contact_tags.sql` — see "Right now" above
 - [ ] Verify RLS is enabled on all `doc_*` tables:
   ```sql
   select tablename, rowsecurity

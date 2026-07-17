@@ -65,6 +65,10 @@ export interface Contact {
   status: ContactStatus;
   source: ContactSource;
   custom_fields: CustomFields;
+  // Freeform label set at upload/add time (e.g. "YouTube", "Conference 2026") —
+  // see migration 013. Only meaningful for source='manual' rows in practice,
+  // but not enforced. Null means untagged.
+  tag: string | null;
   last_contacted_at: string | null;
   created_at: string;
   updated_at: string;

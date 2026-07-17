@@ -1,13 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabaseClient";
 import { callEdgeFunction } from "../lib/apiClient";
+import { parseLeadFile } from "../lib/csvImport";
 import { useOrganization } from "../hooks/useOrganization";
 import { AddContactDialog } from "../components/AddContactDialog";
 import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 import {
   Table,
   TableBody,
@@ -17,16 +20,24 @@ import {
   TableRow,
 } from "../components/ui/table";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { Skeleton } from "../components/ui/skeleton";
-import { ChevronDown, ExternalLink, Loader2, Sparkles, Trash2, UserPlus } from "lucide-react";
+import { ChevronDown, ExternalLink, Loader2, Sparkles, Trash2, Upload, UserPlus } from "lucide-react";
 import type { Contact, ContactStatus } from "../types/database";
 
 const MAX_EMAIL_SEARCH_SELECTION = 50;
+const UNTAGGED = "__untagged__";
 
 const STATUS_OPTIONS: { value: ContactStatus; label: string }[] = [
   { value: "pending", label: "Pending" },
@@ -44,6 +55,7 @@ export function ManualLeads() {
   const { currentOrgId } = useOrganization();
   const queryClient = useQueryClient();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [tagFilter, setTagFilter] = useState<string>("all");
 
   // Same query key as Scraped Leads (Contacts.tsx) and Outreach — they all
   // read/write doc_contacts, so sharing ["contacts", orgId] is what keeps
@@ -55,7 +67,7 @@ export function ManualLeads() {
       const { data, error } = await supabase
         .from("doc_contacts")
         .select(
-          "id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, custom_fields, last_contacted_at, created_at, updated_at"
+          "id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, custom_fields, tag, last_contacted_at, created_at, updated_at"
         )
         .eq("org_id", currentOrgId)
         .order("created_at", { ascending: false });
@@ -76,10 +88,26 @@ export function ManualLeads() {
     }
   }, [contactsQuery.error]);
 
-  // Manually added leads: added one-by-one via the Add Lead dialog here, or
-  // uploaded via CSV/Excel on the Outreach page — both are tagged
-  // source: 'manual' in doc_contacts.
-  const leads = (contactsQuery.data ?? []).filter((c) => c.source === "manual");
+  // Manually added leads: added one-by-one via the Add Lead dialog, or
+  // uploaded via CSV/Excel here — both are tagged source: 'manual' in
+  // doc_contacts. Each batch/lead can also carry a freeform `tag` (e.g.
+  // "YouTube") which drives the filter chips below — no fixed list, it's
+  // just whatever distinct tag values currently exist.
+  const allManualLeads = (contactsQuery.data ?? []).filter((c) => c.source === "manual");
+
+  const distinctTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of allManualLeads) {
+      if (l.tag && l.tag.trim()) set.add(l.tag.trim());
+    }
+    return [...set].sort();
+  }, [allManualLeads]);
+
+  const leads = useMemo(() => {
+    if (tagFilter === "all") return allManualLeads;
+    if (tagFilter === UNTAGGED) return allManualLeads.filter((l) => !l.tag || !l.tag.trim());
+    return allManualLeads.filter((l) => l.tag === tagFilter);
+  }, [allManualLeads, tagFilter]);
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ contactId, status }: { contactId: string; status: ContactStatus }) => {
@@ -158,11 +186,11 @@ export function ManualLeads() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Manual Added Leads</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {leads.length} lead{leads.length === 1 ? "" : "s"} added by hand or via CSV/Excel upload
+            {allManualLeads.length} lead{allManualLeads.length === 1 ? "" : "s"} added by hand or via CSV/Excel upload
           </p>
         </div>
         <div className="flex gap-2">
@@ -180,9 +208,42 @@ export function ManualLeads() {
               )}
             </Button>
           )}
+          <UploadLeadsDialog orgId={currentOrgId} existingTags={distinctTags} />
           <AddContactDialog orgId={currentOrgId} />
         </div>
       </div>
+
+      {distinctTags.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-muted-foreground mr-1">Filter by tag:</span>
+          <Badge
+            variant={tagFilter === "all" ? "default" : "outline"}
+            className="cursor-pointer select-none"
+            onClick={() => setTagFilter("all")}
+          >
+            All ({allManualLeads.length})
+          </Badge>
+          {distinctTags.map((tag) => (
+            <Badge
+              key={tag}
+              variant={tagFilter === tag ? "default" : "outline"}
+              className="cursor-pointer select-none"
+              onClick={() => setTagFilter(tag)}
+            >
+              {tag} ({allManualLeads.filter((l) => l.tag === tag).length})
+            </Badge>
+          ))}
+          {allManualLeads.some((l) => !l.tag || !l.tag.trim()) && (
+            <Badge
+              variant={tagFilter === UNTAGGED ? "default" : "outline"}
+              className="cursor-pointer select-none"
+              onClick={() => setTagFilter(UNTAGGED)}
+            >
+              Untagged ({allManualLeads.filter((l) => !l.tag || !l.tag.trim()).length})
+            </Badge>
+          )}
+        </div>
+      )}
 
       {contactsQuery.isLoading ? (
         <div className="space-y-2">
@@ -194,8 +255,9 @@ export function ManualLeads() {
         <div className="text-center py-16 text-muted-foreground">
           <UserPlus className="h-10 w-10 mx-auto mb-3 opacity-30" />
           <p className="text-sm">
-            No manually added leads yet. Use "Add Lead" above, or upload a CSV/Excel file from the
-            Outreach page.
+            {allManualLeads.length === 0
+              ? "No manually added leads yet. Use \"Upload Leads\" or \"Add Lead\" above."
+              : "No leads match this tag filter."}
           </p>
         </div>
       ) : (
@@ -205,6 +267,7 @@ export function ManualLeads() {
               <TableRow>
                 <TableHead className="w-8"></TableHead>
                 <TableHead>Name</TableHead>
+                <TableHead>Tag</TableHead>
                 <TableHead>Headline</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Status</TableHead>
@@ -230,6 +293,13 @@ export function ManualLeads() {
                     )}
                   </TableCell>
                   <TableCell className="font-medium">{contact.full_name}</TableCell>
+                  <TableCell>
+                    {contact.tag ? (
+                      <Badge variant="outline">{contact.tag}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground truncate max-w-48">
                     {contact.headline ?? "—"}
                   </TableCell>
@@ -306,5 +376,121 @@ export function ManualLeads() {
         </div>
       )}
     </div>
+  );
+}
+
+function UploadLeadsDialog({ orgId, existingTags }: { orgId: string; existingTags: string[] }) {
+  const [open, setOpen] = useState(false);
+  const [tag, setTag] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
+
+  function resetAndClose() {
+    setOpen(false);
+    setTag("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    try {
+      const rows = await parseLeadFile(file);
+
+      if (rows.length === 0) {
+        toast.error("No LinkedIn URLs found — check the column headers include something like 'LinkedIn URL' or 'Profile'.");
+        return;
+      }
+
+      const trimmedTag = tag.trim();
+
+      const { error } = await supabase
+        .from("doc_contacts")
+        .upsert(
+          rows.map((r) => ({
+            org_id: orgId,
+            linkedin_profile_url: r.linkedin_profile_url,
+            full_name: r.full_name || "Unknown",
+            status: "pending" as const,
+            source: "manual" as const,
+            tag: trimmedTag || null,
+          })),
+          { onConflict: "org_id,linkedin_profile_url", ignoreDuplicates: false }
+        );
+
+      if (error) throw error;
+
+      await queryClient.invalidateQueries({ queryKey: ["contacts", orgId] });
+
+      toast.success(
+        `${rows.length} lead${rows.length === 1 ? "" : "s"} imported${trimmedTag ? ` and tagged "${trimmedTag}"` : ""}`
+      );
+      resetAndClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to import file");
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : resetAndClose())}>
+      <DialogTrigger render={<Button variant="outline" size="sm" />}>
+        <Upload className="h-4 w-4 mr-1" />
+        Upload Leads
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Upload Leads from CSV / Excel</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 pt-2">
+          <div className="space-y-2">
+            <Label>Tag (optional)</Label>
+            <Input
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              placeholder="e.g. YouTube, Conference 2026..."
+            />
+            <p className="text-xs text-muted-foreground">
+              Labels every lead in this file with the same tag, so you can filter by it afterward.
+              Leave blank to import without a tag.
+            </p>
+            {existingTags.length > 0 && (
+              <div className="flex flex-wrap gap-1 pt-1">
+                {existingTags.map((t) => (
+                  <Badge
+                    key={t}
+                    variant="outline"
+                    className="cursor-pointer select-none"
+                    onClick={() => setTag(t)}
+                  >
+                    {t}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label>File</Label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={handleFileChange}
+              disabled={isUploading}
+              className="block w-full text-sm text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border file:border-input file:bg-background file:text-sm file:font-medium hover:file:bg-accent"
+            />
+            {isUploading && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" /> Importing...
+              </p>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

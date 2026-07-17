@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import Papa from "papaparse";
-import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient";
 import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
@@ -20,7 +18,6 @@ import {
   TableRow,
 } from "../components/ui/table";
 import {
-  Upload,
   Sparkles,
   ExternalLink,
   Loader2,
@@ -43,6 +40,7 @@ interface UnifiedLead {
   linkedin_profile_url: string | null;
   headline: string | null;
   status: ContactStatus;
+  tag: string | null;
 }
 
 const FILTER_OPTIONS: { value: FilterType; label: string }[] = [
@@ -51,64 +49,9 @@ const FILTER_OPTIONS: { value: FilterType; label: string }[] = [
   { value: "manual", label: "Manual Added" },
 ];
 
-interface ParsedRow {
-  full_name?: string;
-  linkedin_profile_url: string;
-}
-
-function normalizeKey(key: string) {
-  return key.trim().toLowerCase();
-}
-
-function extractRows(rows: Record<string, unknown>[]): ParsedRow[] {
-  return rows
-    .map((row) => {
-      let name: string | undefined;
-      let url: string | undefined;
-
-      for (const [key, value] of Object.entries(row)) {
-        const k = normalizeKey(key);
-        const v = typeof value === "string" ? value.trim() : String(value ?? "").trim();
-        if (!v) continue;
-
-        if (!url && (k.includes("linkedin") || k.includes("url") || k.includes("profile"))) {
-          url = v;
-        } else if (!name && k.includes("name")) {
-          name = v;
-        }
-      }
-
-      return { full_name: name, linkedin_profile_url: url };
-    })
-    .filter(
-      (r): r is { full_name: string | undefined; linkedin_profile_url: string } =>
-        !!r.linkedin_profile_url
-    );
-}
-
-async function parseFile(file: File): Promise<ParsedRow[]> {
-  const isCsv = file.name.toLowerCase().endsWith(".csv");
-
-  if (isCsv) {
-    const text = await file.text();
-    const result = Papa.parse<Record<string, unknown>>(text, {
-      header: true,
-      skipEmptyLines: true,
-    });
-    return extractRows(result.data);
-  }
-
-  const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array" });
-  const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: "" });
-  return extractRows(rows);
-}
-
 export function Outreach() {
   const { currentOrgId } = useOrganization();
   const queryClient = useQueryClient();
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(
@@ -118,13 +61,13 @@ export function Outreach() {
   const [bulkMessage, setBulkMessage] = useState("");
   const [personalMessages, setPersonalMessages] = useState<Record<string, string>>({});
   const [generatingKey, setGeneratingKey] = useState<string | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
 
-  // Same query keys used by the Scraped Leads (Contacts.tsx) and Engaged Leads
-  // (Leads.tsx) pages — this is what keeps status changes in sync across the app.
-  // Whichever page updates a lead invalidates ["contacts", orgId] or
-  // ["dm-leads", orgId], and every page (including this one) re-fetches.
+  // Same query keys used by the Scraped Leads (Contacts.tsx), Manual Added
+  // Leads (ManualLeads.tsx), and Engaged Leads (Leads.tsx) pages — this is
+  // what keeps status changes in sync across the app. Whichever page updates
+  // a lead invalidates ["contacts", orgId] or ["dm-leads", orgId], and every
+  // page (including this one) re-fetches.
   const contactsQuery = useQuery({
     queryKey: ["contacts", currentOrgId],
     queryFn: async () => {
@@ -132,7 +75,7 @@ export function Outreach() {
       const { data, error } = await supabase
         .from("doc_contacts")
         .select(
-          "id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, last_contacted_at, created_at, updated_at"
+          "id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, tag, last_contacted_at, created_at, updated_at"
         )
         .eq("org_id", currentOrgId)
         .order("created_at", { ascending: false });
@@ -178,6 +121,7 @@ export function Outreach() {
       linkedin_profile_url: c.linkedin_profile_url,
       headline: c.headline,
       status: c.status,
+      tag: c.tag,
     }));
     const fromDmLeads: UnifiedLead[] = (dmLeadsQuery.data ?? []).map((l) => ({
       key: `dm_leads:${l.id}`,
@@ -188,6 +132,7 @@ export function Outreach() {
       linkedin_profile_url: l.linkedin_profile_url,
       headline: l.bio,
       status: l.status,
+      tag: null,
     }));
     return [...fromContacts, ...fromDmLeads];
   }, [contactsQuery.data, dmLeadsQuery.data]);
@@ -350,55 +295,6 @@ export function Outreach() {
     toast.success("Message copied — paste it into that lead's LinkedIn tab");
   }
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-uploading the same file later
-    if (!file || !currentOrgId) return;
-
-    setIsUploading(true);
-    try {
-      const rows = await parseFile(file);
-
-      if (rows.length === 0) {
-        toast.error("No LinkedIn URLs found — check the column headers include something like 'LinkedIn URL' or 'Profile'.");
-        return;
-      }
-
-      // Uploaded here (as opposed to scraped via the Scraped Leads page) — tag as
-      // 'manual' so it shows under the Manual Added filter.
-      const { data, error } = await supabase
-        .from("doc_contacts")
-        .upsert(
-          rows.map((r) => ({
-            org_id: currentOrgId,
-            linkedin_profile_url: r.linkedin_profile_url,
-            full_name: r.full_name || "Unknown",
-            status: "pending" as const,
-            source: "manual" as const,
-          })),
-          { onConflict: "org_id,linkedin_profile_url", ignoreDuplicates: false }
-        )
-        .select("id");
-
-      if (error) throw error;
-
-      await queryClient.invalidateQueries({ queryKey: ["contacts", currentOrgId] });
-
-      setSelectedKeys((prev) => {
-        const next = new Set(prev);
-        for (const row of data ?? []) next.add(`contacts:${row.id}`);
-        return next;
-      });
-      setActiveFilters((prev) => new Set(prev).add("manual"));
-
-      toast.success(`${rows.length} leads imported and added to your queue`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to import file");
-    } finally {
-      setIsUploading(false);
-    }
-  }
-
   const generateMutation = useMutation({
     mutationFn: async (lead: UnifiedLead) => {
       setGeneratingKey(lead.key);
@@ -476,30 +372,7 @@ export function Outreach() {
       {/* Step 1: pick leads */}
       <Card>
         <CardContent className="pt-6 space-y-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h2 className="text-sm font-medium">1. Choose your leads</h2>
-            <div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                className="hidden"
-                onChange={handleFileChange}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
-              >
-                {isUploading ? (
-                  <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Importing...</>
-                ) : (
-                  <><Upload className="h-4 w-4 mr-1" /> Upload CSV / Excel</>
-                )}
-              </Button>
-            </div>
-          </div>
+          <h2 className="text-sm font-medium">1. Choose your leads</h2>
 
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground mr-1">Filter:</span>
@@ -519,7 +392,7 @@ export function Outreach() {
             <p className="text-sm text-muted-foreground">Loading leads...</p>
           ) : allLeads.length === 0 ? (
             <p className="text-sm text-muted-foreground py-6 text-center">
-              No leads yet — upload a file above, or add leads from Scraped Leads / Engaged Leads first.
+              No leads yet — add leads from Scraped Leads, Manual Added Leads, or Engaged Leads first.
             </p>
           ) : visibleLeads.length === 0 ? (
             <p className="text-sm text-muted-foreground py-6 text-center">
@@ -559,6 +432,7 @@ export function Outreach() {
                   <Badge variant="outline" className="capitalize">
                     {l.filterType}
                   </Badge>
+                  {l.tag && <Badge variant="outline">{l.tag}</Badge>}
                   <Badge variant={l.status === "messaged" ? "default" : "outline"}>
                     {l.status}
                   </Badge>
@@ -661,9 +535,12 @@ export function Outreach() {
                     <TableRow key={lead.key}>
                       <TableCell className="align-top">
                         <p className="font-medium">{lead.full_name}</p>
-                        <Badge variant="outline" className="capitalize mb-1">
-                          {lead.filterType}
-                        </Badge>
+                        <div className="flex items-center gap-1 mb-1">
+                          <Badge variant="outline" className="capitalize">
+                            {lead.filterType}
+                          </Badge>
+                          {lead.tag && <Badge variant="outline">{lead.tag}</Badge>}
+                        </div>
                         {lead.linkedin_profile_url ? (
                           <a
                             href={lead.linkedin_profile_url}

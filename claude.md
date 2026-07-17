@@ -185,6 +185,7 @@ it means a future access-model change (if one is ever needed again) stays just a
 - supabase/migrations/010_unify_lead_sources.sql → Adds `source` to doc_contacts; adds `status`/`linkedin_profile_url`/`last_contacted_at` to doc_dm_leads; makes doc_outreach_messages.contact_id nullable and adds dm_lead_id, so a lead from either table can flow through the unified Outreach queue
 - supabase/migrations/011_add_custom_fields.sql → Adds `custom_fields` jsonb column to doc_contacts and doc_dm_leads for freeform per-lead info (title, company, etc.), no fixed schema
 - supabase/migrations/012_remove_org_teams.sql → Collapses the org/team model into one isolated account per login: auto-creates a doc_organizations row per user via a new auth.users trigger, redefines doc_user_org_ids() to return only the caller's own row, drops doc_organization_members + doc_user_is_org_admin(). See "Account model" above.
+- supabase/migrations/013_add_contact_tags.sql → Adds `tag` text column to doc_contacts — freeform label set at upload/add time (e.g. "YouTube"), drives the dynamic filter chips on the Manual Added Leads page
 
 ### Deployment
 - docs/deployment/MANUAL_SQL_OPERATIONS.md  → Manual SQL that must be run
@@ -204,12 +205,13 @@ it means a future access-model change (if one is ever needed again) stays just a
 ### Frontend
 - src/pages/Dashboard.tsx     → Centralized queue of pending AI comments
 - src/pages/Contacts.tsx      → "Scraped Leads" page. CRM pipeline of doctors identified via the scraper only (`source = 'scraped'`). Manually added leads live on the Manual Added Leads page instead, though both read/write the same doc_contacts table and `["contacts", orgId]` query key. Select leads without an email (max 50) to run doc_enrich_emails, or (max 20) to run doc_enrich_emails_apollo as a second attempt; export filtered view to CSV
-- src/pages/ManualLeads.tsx   → "Manual Added Leads" page. Shows doc_contacts rows where `source = 'manual'` — added one-by-one via AddContactDialog, or via CSV/Excel upload on the Outreach page. Supports status changes, delete, and the same email-enrichment (Find Emails) flow as Scraped Leads. Shares the `["contacts", orgId]` query key so status stays in sync with Scraped Leads and Outreach.
+- src/pages/ManualLeads.tsx   → "Manual Added Leads" page. Shows doc_contacts rows where `source = 'manual'` — added one-by-one via AddContactDialog, or via CSV/Excel upload (`UploadLeadsDialog`, defined in this file). Both let you set a freeform `tag` (e.g. "YouTube") on the lead(s); the page's filter chips are built dynamically from whatever distinct `tag` values currently exist — no fixed list. Supports status changes, delete, and the same email-enrichment (Find Emails) flow as Scraped Leads. Shares the `["contacts", orgId]` query key so status stays in sync with Scraped Leads and Outreach.
 - src/pages/Settings.tsx      → Account settings (name, AI tone/system prompt), tone sample uploads. No team/member management — see "Account model" above.
 - src/pages/DmAssistant.tsx   → AI-drafted DM replies/openers for one conversation at a time, backed by doc_dm_drafts history
 - src/pages/Leads.tsx         → "Engaged Leads" page. Manually curated lead list (name/bio/LinkedIn URL) feeding DM Assistant context, backed by doc_dm_leads. Has its own status pipeline (pending/messaged/engaged) matching doc_contacts
-- src/pages/Outreach.tsx      → Unified outreach queue merging doc_contacts (scraped + manual) and doc_dm_leads (engaged) into one list, with Scraped/Engaged/Manual Added filter chips. Upload CSV/Excel (rows land in doc_contacts tagged `source = 'manual'`), draft messages (bulk or AI-personalized), assisted-send (copies message + opens LinkedIn — never sends automatically, per Out of Scope section). Logs to doc_outreach_messages against whichever source table (`contact_id` or `dm_lead_id`) the lead came from, and writes status back to that same table — see "Status sync" note under doc_outreach_messages below
-- src/components/AddContactDialog.tsx → Shared "Add Lead" dialog (name/LinkedIn URL/headline), inserts into doc_contacts with `source = 'manual'`. Currently only used by the Manual Added Leads page — kept as its own component so the insert shape can't drift if it's ever wired into another page too.
+- src/pages/Outreach.tsx      → Unified outreach queue merging doc_contacts (scraped + manual) and doc_dm_leads (engaged) into one list, with Scraped/Engaged/Manual Added filter chips (and each lead's `tag`, if any, shown as a badge). No upload here anymore — CSV/Excel upload lives on the Manual Added Leads page (see above); this page only composes/sends. Draft messages (bulk or AI-personalized), assisted-send (copies message + opens LinkedIn — never sends automatically, per Out of Scope section). Logs to doc_outreach_messages against whichever source table (`contact_id` or `dm_lead_id`) the lead came from, and writes status back to that same table — see "Status sync" note under doc_outreach_messages below
+- src/lib/csvImport.ts        → `parseLeadFile()` — shared CSV/XLSX parsing used by ManualLeads.tsx's upload dialog. Matches columns by header keyword ("linkedin"/"url"/"profile", "name") rather than exact names.
+- src/components/AddContactDialog.tsx → Shared "Add Lead" dialog (name/LinkedIn URL/headline/tag), inserts into doc_contacts with `source = 'manual'`. Currently only used by the Manual Added Leads page — kept as its own component so the insert shape can't drift if it's ever wired into another page too.
 - src/components/CustomFieldsDialog.tsx → Shared dialog for adding freeform key/value info to a lead (job title, company, etc. — see doc_contacts.custom_fields / doc_dm_leads.custom_fields, migration 011). Used on Scraped Leads, Manual Added Leads, and Engaged Leads. Takes `table` ("doc_contacts" | "doc_dm_leads") + `queryKey` so it invalidates whichever page's cache owns the row.
 - src/components/ErrorBoundary.tsx → Top-level React error boundary wrapping the router in App.tsx. Without it, any uncaught render error (bad query, null dereference, a bug in a new page) unmounts the whole tree and leaves a blank white screen with no message — this catches it and shows a real error + reload option instead.
 - src/components/QueueItem.tsx→ Comment review UI card with optimistic updates
@@ -293,7 +295,7 @@ Realtime: Enabled ONLY for `status` column
 
 ### doc_contacts
 "Scraped Leads" page. Also holds one-by-one manually added leads (`source = 'manual'`) and rows
-imported via the Outreach page's CSV/Excel upload (also tagged `source = 'manual'`).
+imported via the Manual Added Leads page's CSV/Excel upload (also tagged `source = 'manual'`).
 
 | Column | Type | Constraints |
 |--------|------|-------------|
@@ -308,12 +310,13 @@ imported via the Outreach page's CSV/Excel upload (also tagged `source = 'manual
 | status | text | not null, default 'pending', check in ('pending', 'messaged', 'engaged') |
 | source | text | not null, default 'scraped', check in ('scraped', 'manual') — added in migration 010 |
 | custom_fields | jsonb | not null, default '{}' — freeform key/value lead info (title, company, etc.), added in migration 011 |
+| tag | text | freeform label set at upload/add time (e.g. "YouTube"), added in migration 013 — drives Manual Added Leads' dynamic filter chips |
 | last_contacted_at | timestamptz | |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
 Policies: doc_contacts_select_org, doc_contacts_insert_org, doc_contacts_update_org, doc_contacts_delete_org (all scoped to your own account via doc_user_org_ids())
-Indexes: doc_contacts_user_id_idx, doc_contacts_org_id_idx, doc_contacts_status_idx, doc_contacts_org_status_idx, doc_contacts_source_idx
+Indexes: doc_contacts_user_id_idx, doc_contacts_org_id_idx, doc_contacts_status_idx, doc_contacts_org_status_idx, doc_contacts_source_idx, doc_contacts_tag_idx
 
 ### doc_tone_samples
 | Column | Type | Constraints |

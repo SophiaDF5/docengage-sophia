@@ -14,15 +14,15 @@ import {
 } from "./ui/dialog";
 import { Loader2, Plus } from "lucide-react";
 
-// Shared by the Scraped Leads page and the Manual Added Leads page — both
-// insert into doc_contacts with source: 'manual', just filtered differently
-// on display. Keeping this in one place means the insert shape can't drift
-// between the two.
+// Used by the Manual Added Leads page to add a single lead by hand — inserts
+// into doc_contacts with source: 'manual'. Kept as its own component so the
+// insert shape can't drift if it's ever wired into another page too.
 export function AddContactDialog({ orgId }: { orgId: string }) {
   const [open, setOpen] = useState(false);
   const [fullName, setFullName] = useState("");
   const [linkedinUrl, setLinkedinUrl] = useState("");
   const [headline, setHeadline] = useState("");
+  const [tag, setTag] = useState("");
   const queryClient = useQueryClient();
 
   const addMutation = useMutation({
@@ -32,6 +32,7 @@ export function AddContactDialog({ orgId }: { orgId: string }) {
         full_name: fullName.trim(),
         linkedin_profile_url: linkedinUrl.trim(),
         headline: headline.trim() || null,
+        tag: tag.trim() || null,
         source: "manual",
         status: "pending",
       });
@@ -43,6 +44,7 @@ export function AddContactDialog({ orgId }: { orgId: string }) {
       setFullName("");
       setLinkedinUrl("");
       setHeadline("");
+      setTag("");
       queryClient.invalidateQueries({ queryKey: ["contacts", orgId] });
     },
     onError: (err) => {
@@ -84,6 +86,14 @@ export function AddContactDialog({ orgId }: { orgId: string }) {
               value={headline}
               onChange={(e) => setHeadline(e.target.value)}
               placeholder="Cardiologist at..."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Tag (optional)</Label>
+            <Input
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              placeholder="e.g. YouTube, Conference 2026..."
             />
           </div>
           <Button
