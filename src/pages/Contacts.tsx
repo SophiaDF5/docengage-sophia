@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabaseClient";
 import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
 import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
+import { EditContactDialog } from "../components/EditContactDialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -88,7 +89,7 @@ export function Contacts() {
       if (!currentOrgId) return [];
       const { data, error } = await supabase
         .from("doc_contacts")
-        .select("id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, custom_fields, last_contacted_at, created_at, updated_at")
+        .select("id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, custom_fields, tag, last_contacted_at, created_at, updated_at")
         .eq("org_id", currentOrgId)
         .order("created_at", { ascending: false });
 
@@ -455,6 +456,8 @@ export function Contacts() {
                     {new Date(contact.created_at).toLocaleDateString()}
                   </TableCell>
                   <TableCell>
+                    <div className="flex items-center gap-1">
+                    <EditContactDialog contact={contact} queryKey={["contacts", currentOrgId]} />
                     <a
                       href={contact.linkedin_profile_url}
                       target="_blank"
@@ -463,6 +466,7 @@ export function Contacts() {
                     >
                       <ExternalLink className="h-4 w-4" />
                     </a>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

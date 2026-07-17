@@ -6,6 +6,7 @@ import { callEdgeFunction } from "../lib/apiClient";
 import { parseLeadFile } from "../lib/csvImport";
 import { useOrganization } from "../hooks/useOrganization";
 import { AddContactDialog } from "../components/AddContactDialog";
+import { EditContactDialog } from "../components/EditContactDialog";
 import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -350,6 +351,7 @@ export function ManualLeads() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
+                      <EditContactDialog contact={contact} queryKey={["contacts", currentOrgId]} />
                       <a
                         href={contact.linkedin_profile_url}
                         target="_blank"
