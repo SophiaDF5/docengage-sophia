@@ -147,14 +147,18 @@ function CaptionMode({ orgId }: { orgId: string }) {
       .eq("links", authorLinkedin.trim())
       .maybeSingle();
     if (!existing) {
+      // Commenting on someone's post counts as engaging with them, so this
+      // starts as "engaged" rather than the table's default "pending" — see
+      // "Account model"-adjacent note in claude.md on Engaged Leads.
       const { error } = await supabase.from("doc_dm_leads").insert({
         org_id: orgId,
         name: authorName.trim(),
         links: authorLinkedin.trim(),
+        status: "engaged",
       });
       if (!error) {
         queryClient.invalidateQueries({ queryKey: ["dm-leads", orgId] });
-        toast.success(`${authorName.trim()} saved to Leads`);
+        toast.success(`${authorName.trim()} saved to Engaged Leads`);
       }
     }
   };
@@ -208,7 +212,7 @@ function CaptionMode({ orgId }: { orgId: string }) {
       </div>
       {authorName.trim() && authorLinkedin.trim() && (
         <p className="text-xs text-muted-foreground">
-          This person will be saved to Leads after generation.
+          This person will be saved to Engaged Leads after generation.
         </p>
       )}
       <Button
@@ -247,14 +251,17 @@ function ImageMode({ orgId }: { orgId: string }) {
       .eq("links", authorLinkedin.trim())
       .maybeSingle();
     if (!existing) {
+      // Commenting on someone's post counts as engaging with them, so this
+      // starts as "engaged" rather than the table's default "pending".
       const { error } = await supabase.from("doc_dm_leads").insert({
         org_id: orgId,
         name: authorName.trim(),
         links: authorLinkedin.trim(),
+        status: "engaged",
       });
       if (!error) {
         queryClient.invalidateQueries({ queryKey: ["dm-leads", orgId] });
-        toast.success(`${authorName.trim()} saved to Leads`);
+        toast.success(`${authorName.trim()} saved to Engaged Leads`);
       }
     }
   };
@@ -325,7 +332,7 @@ function ImageMode({ orgId }: { orgId: string }) {
       </div>
       {authorName.trim() && authorLinkedin.trim() && (
         <p className="text-xs text-muted-foreground">
-          This person will be saved to Leads after generation.
+          This person will be saved to Engaged Leads after generation.
         </p>
       )}
       <div className="space-y-2">

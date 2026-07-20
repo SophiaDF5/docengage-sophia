@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabaseClient";
 import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
+import { useUnifiedLeads, type UnifiedLead, type FilterType } from "../hooks/useUnifiedLeads";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -27,24 +28,10 @@ import {
   SquareArrowOutUpRight,
   X,
 } from "lucide-react";
-import type { Contact, ContactStatus, DmLead } from "../types/database";
+import type { ContactStatus } from "../types/database";
 
 type Mode = "bulk" | "personalized";
-type SourceTable = "contacts" | "dm_leads";
-type FilterType = "scraped" | "manual" | "engaged";
 const UNTAGGED = "__untagged__";
-
-interface UnifiedLead {
-  key: string; // `${sourceTable}:${id}`
-  id: string;
-  sourceTable: SourceTable;
-  filterType: FilterType;
-  full_name: string;
-  linkedin_profile_url: string | null;
-  headline: string | null;
-  status: ContactStatus;
-  tag: string | null;
-}
 
 const FILTER_OPTIONS: { value: FilterType; label: string }[] = [
   { value: "scraped", label: "Scraped" },
@@ -84,74 +71,7 @@ export function Outreach() {
   // what keeps status changes in sync across the app. Whichever page updates
   // a lead invalidates ["contacts", orgId] or ["dm-leads", orgId], and every
   // page (including this one) re-fetches.
-  const contactsQuery = useQuery({
-    queryKey: ["contacts", currentOrgId],
-    queryFn: async () => {
-      if (!currentOrgId) return [];
-      const { data, error } = await supabase
-        .from("doc_contacts")
-        .select(
-          "id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, tag, last_contacted_at, created_at, updated_at"
-        )
-        .eq("org_id", currentOrgId)
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as Contact[];
-    },
-    enabled: !!currentOrgId,
-    retry: 1,
-  });
-
-  const dmLeadsQuery = useQuery({
-    queryKey: ["dm-leads", currentOrgId],
-    queryFn: async () => {
-      if (!currentOrgId) return [];
-      const { data, error } = await supabase
-        .from("doc_dm_leads")
-        .select("*")
-        .eq("org_id", currentOrgId)
-        .order("name");
-      if (error) throw error;
-      return data as DmLead[];
-    },
-    enabled: !!currentOrgId,
-    retry: 1,
-  });
-
-  useEffect(() => {
-    if (contactsQuery.error || dmLeadsQuery.error) {
-      const err = contactsQuery.error ?? dmLeadsQuery.error;
-      toast.error(err instanceof Error ? `Failed to load leads: ${err.message}` : "Failed to load leads");
-    }
-  }, [contactsQuery.error, dmLeadsQuery.error]);
-
-  const isLoading = contactsQuery.isLoading || dmLeadsQuery.isLoading;
-
-  const allLeads = useMemo<UnifiedLead[]>(() => {
-    const fromContacts: UnifiedLead[] = (contactsQuery.data ?? []).map((c) => ({
-      key: `contacts:${c.id}`,
-      id: c.id,
-      sourceTable: "contacts",
-      filterType: c.source === "scraped" ? "scraped" : "manual",
-      full_name: c.full_name,
-      linkedin_profile_url: c.linkedin_profile_url,
-      headline: c.headline,
-      status: c.status,
-      tag: c.tag,
-    }));
-    const fromDmLeads: UnifiedLead[] = (dmLeadsQuery.data ?? []).map((l) => ({
-      key: `dm_leads:${l.id}`,
-      id: l.id,
-      sourceTable: "dm_leads",
-      filterType: "engaged",
-      full_name: l.name,
-      linkedin_profile_url: l.linkedin_profile_url,
-      headline: l.bio,
-      status: l.status,
-      tag: null,
-    }));
-    return [...fromContacts, ...fromDmLeads];
-  }, [contactsQuery.data, dmLeadsQuery.data]);
+  const { allLeads, isLoading } = useUnifiedLeads(currentOrgId);
 
   // Only doc_contacts rows carry a tag (dm_leads/Engaged never do) — built
   // from whatever's currently in scope after the source filter, so the tag
