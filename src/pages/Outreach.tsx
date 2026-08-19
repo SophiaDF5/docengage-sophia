@@ -167,17 +167,22 @@ export function Outreach() {
     });
   }
 
-  const allSelected = visibleLeads.length > 0 && visibleLeads.every((l) => selectedKeys.has(l.key));
+  // Leads already tagged "Invited" can't be selected for outreach — you've
+  // already reached out, so re-messaging/re-inviting them from this page is
+  // blocked rather than just discouraged.
+  const selectableLeads = visibleLeads.filter((l) => l.tag !== "Invited");
+  const allSelected =
+    selectableLeads.length > 0 && selectableLeads.every((l) => selectedKeys.has(l.key));
 
   function toggleSelectAll() {
     setSelectedKeys((prev) => {
       if (allSelected) {
         const next = new Set(prev);
-        for (const l of visibleLeads) next.delete(l.key);
+        for (const l of selectableLeads) next.delete(l.key);
         return next;
       }
       const next = new Set(prev);
-      for (const l of visibleLeads) next.add(l.key);
+      for (const l of selectableLeads) next.add(l.key);
       return next;
     });
   }
@@ -349,6 +354,17 @@ export function Outreach() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["contacts", currentOrgId] });
       queryClient.invalidateQueries({ queryKey: ["dm-leads", currentOrgId] });
+      // If it just became "Invited", it can no longer be selected for
+      // outreach — drop it out of the current queue so it's not left
+      // sitting there with its actions effectively stale.
+      if (variables.tag === "Invited") {
+        setSelectedKeys((prev) => {
+          if (!prev.has(variables.lead.key)) return prev;
+          const next = new Set(prev);
+          next.delete(variables.lead.key);
+          return next;
+        });
+      }
       toast.success(variables.tag ? `Tagged "${variables.tag}"` : "Tag removed");
     },
     onError: () => toast.error("Failed to update tag"),
@@ -487,19 +503,25 @@ export function Outreach() {
                   className="h-4 w-4 rounded border-border"
                 />
                 <span className="font-medium">
-                  {allSelected ? "Deselect all" : `Select all (${visibleLeads.length})`}
+                  {allSelected ? "Deselect all" : `Select all (${selectableLeads.length})`}
                 </span>
               </label>
               <div className="max-h-64 overflow-y-auto divide-y">
-                {visibleLeads.map((l) => (
+                {visibleLeads.map((l) => {
+                const isInvited = l.tag === "Invited";
+                return (
                 <label
                   key={l.key}
-                  className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-muted/50 cursor-pointer"
+                  className={`flex items-center gap-3 px-3 py-2 text-sm hover:bg-muted/50 ${
+                    isInvited ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+                  }`}
+                  title={isInvited ? "Already invited — can't be re-added to outreach" : undefined}
                 >
                   <input
                     type="checkbox"
                     checked={selectedKeys.has(l.key)}
                     onChange={() => toggleSelect(l.key)}
+                    disabled={isInvited}
                     className="h-4 w-4 rounded border-border"
                   />
                   <span className="flex-1 min-w-0 truncate">{l.full_name}</span>
@@ -528,7 +550,8 @@ export function Outreach() {
                     {l.status}
                   </Badge>
                 </label>
-                ))}
+                );
+                })}
               </div>
             </div>
           )}
