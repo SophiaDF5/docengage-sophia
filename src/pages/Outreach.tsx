@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabaseClient";
@@ -73,10 +73,10 @@ export function Outreach() {
   // page (including this one) re-fetches.
   const { allLeads, isLoading } = useUnifiedLeads(currentOrgId);
 
-  // Only doc_contacts rows carry a tag (dm_leads/Engaged never do) — built
-  // from whatever's currently in scope after the source filter, so the tag
-  // chip list doesn't show tags that don't apply to the sources you've
-  // already narrowed down to.
+  // Every source (Scraped/Manual via doc_contacts, Engaged via doc_dm_leads —
+  // see migration 014) carries a tag now — built from whatever's currently in
+  // scope after the source filter, so the tag chip list doesn't show tags
+  // that don't apply to the sources you've already narrowed down to.
   const sourceFilteredLeads = useMemo(
     () => allLeads.filter((l) => activeFilters.has(l.filterType)),
     [allLeads, activeFilters]
@@ -336,6 +336,30 @@ export function Outreach() {
     },
   });
 
+  // Lets you tag a lead (e.g. "Invited") right from Outreach instead of
+  // having to go edit it on its home page. Writes to whichever table the
+  // lead actually lives in; the tag then shows up in the filter chips above
+  // automatically since those are built from live data, not a fixed list.
+  const setTagMutation = useMutation({
+    mutationFn: async ({ lead, tag }: { lead: UnifiedLead; tag: string | null }) => {
+      const table = lead.sourceTable === "contacts" ? "doc_contacts" : "doc_dm_leads";
+      const { error } = await supabase.from(table).update({ tag }).eq("id", lead.id);
+      if (error) throw error;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["contacts", currentOrgId] });
+      queryClient.invalidateQueries({ queryKey: ["dm-leads", currentOrgId] });
+      toast.success(variables.tag ? `Tagged "${variables.tag}"` : "Tag removed");
+    },
+    onError: () => toast.error("Failed to update tag"),
+  });
+
+  function toggleInvitedTag(lead: UnifiedLead, e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setTagMutation.mutate({ lead, tag: lead.tag === "Invited" ? null : "Invited" });
+  }
+
   async function openAndCopy(lead: UnifiedLead, message: string) {
     if (!message.trim()) {
       toast.error("Write or generate a message first");
@@ -487,7 +511,19 @@ export function Outreach() {
                   <Badge variant="outline" className="capitalize">
                     {l.filterType}
                   </Badge>
-                  {l.tag && <Badge variant="outline">{l.tag}</Badge>}
+                  {l.tag && l.tag !== "Invited" && <Badge variant="outline">{l.tag}</Badge>}
+                  <Badge
+                    variant={l.tag === "Invited" ? "default" : "outline"}
+                    className="cursor-pointer select-none"
+                    onClick={(e) => toggleInvitedTag(l, e)}
+                    title={
+                      l.tag && l.tag !== "Invited"
+                        ? `Currently tagged "${l.tag}" — click to replace with Invited`
+                        : "Click to toggle the Invited tag"
+                    }
+                  >
+                    {l.tag === "Invited" ? "✓ Invited" : "Mark Invited"}
+                  </Badge>
                   <Badge variant={l.status === "messaged" ? "default" : "outline"}>
                     {l.status}
                   </Badge>
@@ -591,11 +627,20 @@ export function Outreach() {
                     <TableRow key={lead.key}>
                       <TableCell className="align-top">
                         <p className="font-medium">{lead.full_name}</p>
-                        <div className="flex items-center gap-1 mb-1">
+                        <div className="flex items-center gap-1 mb-1 flex-wrap">
                           <Badge variant="outline" className="capitalize">
                             {lead.filterType}
                           </Badge>
-                          {lead.tag && <Badge variant="outline">{lead.tag}</Badge>}
+                          {lead.tag && lead.tag !== "Invited" && (
+                            <Badge variant="outline">{lead.tag}</Badge>
+                          )}
+                          <Badge
+                            variant={lead.tag === "Invited" ? "default" : "outline"}
+                            className="cursor-pointer select-none"
+                            onClick={(e) => toggleInvitedTag(lead, e)}
+                          >
+                            {lead.tag === "Invited" ? "✓ Invited" : "Mark Invited"}
+                          </Badge>
                         </div>
                         {lead.linkedin_profile_url ? (
                           <a

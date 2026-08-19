@@ -90,7 +90,7 @@ export function useUnifiedLeads(orgId: string | null) {
       linkedin_profile_url: l.linkedin_profile_url,
       headline: l.bio,
       status: l.status,
-      tag: null,
+      tag: l.tag,
     }));
     return [...fromContacts, ...fromDmLeads];
   }, [contactsQuery.data, dmLeadsQuery.data]);

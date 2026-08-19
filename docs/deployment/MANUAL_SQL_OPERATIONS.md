@@ -3,9 +3,22 @@
 SQL operations that must be run manually in the Supabase SQL Editor per environment
 before deploying. Check each item after running it.
 
-## Right now (pending as of 2026-07-17, updated)
+## Right now (pending as of 2026-08-19, updated)
 
-Your production project has migrations through `009_outreach_messages.sql` applied. Run the
+Migrations 010–013 should already be applied (the app has been running features that depend on
+them — tags, custom fields, account isolation — since mid-July). One new migration is pending:
+
+- [ ] **Migration 014** — adds a `tag` column to `doc_dm_leads` (Engaged Leads), matching the one
+  `doc_contacts` already has. Needed for the new "Mark Invited" quick-tag button on the Outreach
+  page to work for Engaged leads, not just Scraped/Manual ones. See its section below.
+- [ ] Redeploy the frontend (`dist` folder) to Netlify after running it — that's the only other
+  step, no edge functions changed.
+
+<details>
+<summary>Migrations 010–013 (should already be applied — expand only if you're not sure)</summary>
+
+Your production project originally had migrations through `009_outreach_messages.sql` applied. If
+you're setting up a fresh environment or aren't sure these ran, run the
 following four migrations **in this exact order**, in one SQL Editor session, then deploy edge
 functions and the frontend:
 
@@ -215,6 +228,27 @@ Verify with:
 ```sql
 select column_name from information_schema.columns
 where table_name = 'doc_contacts' and column_name = 'tag';
+```
+
+</details>
+
+### Migration 014 — paste this into the SQL Editor
+
+```sql
+begin;
+
+alter table public.doc_dm_leads
+  add column if not exists tag text;
+
+create index if not exists doc_dm_leads_tag_idx on public.doc_dm_leads(tag);
+
+commit;
+```
+
+Verify with:
+```sql
+select column_name from information_schema.columns
+where table_name = 'doc_dm_leads' and column_name = 'tag';
 ```
 
 ## Deploy edge functions

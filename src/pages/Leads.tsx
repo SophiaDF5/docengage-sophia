@@ -287,7 +287,9 @@ export function Leads() {
             const displayName = sourceTable === "dm_leads" ? lead.name : lead.full_name;
             const displayBio = sourceTable === "dm_leads" ? lead.bio : lead.headline;
             const customFields = lead.custom_fields ?? {};
-            const tag = sourceTable === "contacts" ? lead.tag : null;
+            // Both doc_contacts and doc_dm_leads carry a tag as of migration
+            // 014 — e.g. "Invited", set from Outreach.
+            const tag = lead.tag;
 
             return (
               <Card key={card.key}>

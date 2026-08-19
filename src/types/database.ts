@@ -97,6 +97,10 @@ export interface DmLead {
   linkedin_profile_url: string | null;
   status: ContactStatus;
   custom_fields: CustomFields;
+  // Freeform label (e.g. "Invited") — see migration 014. Same tag vocabulary
+  // as doc_contacts.tag, kept independent per table since each lead lives in
+  // exactly one of the two. Null means untagged.
+  tag: string | null;
   last_contacted_at: string | null;
   created_at: string;
   updated_at: string;
