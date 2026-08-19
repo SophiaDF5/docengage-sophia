@@ -8,6 +8,7 @@ import { useOrganization } from "../hooks/useOrganization";
 import { AddContactDialog } from "../components/AddContactDialog";
 import { EditContactDialog } from "../components/EditContactDialog";
 import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
+import { InvitedTagBadge } from "../components/InvitedTagBadge";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -295,11 +296,17 @@ export function ManualLeads() {
                   </TableCell>
                   <TableCell className="font-medium">{contact.full_name}</TableCell>
                   <TableCell>
-                    {contact.tag ? (
-                      <Badge variant="outline">{contact.tag}</Badge>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {contact.tag && contact.tag !== "Invited" && (
+                        <Badge variant="outline">{contact.tag}</Badge>
+                      )}
+                      <InvitedTagBadge
+                        table="doc_contacts"
+                        recordId={contact.id}
+                        tag={contact.tag}
+                        queryKey={["contacts", currentOrgId]}
+                      />
+                    </div>
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground truncate max-w-48">
                     {contact.headline ?? "—"}

@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabaseClient";
 import { useOrganization } from "../hooks/useOrganization";
 import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
 import { EditContactDialog } from "../components/EditContactDialog";
+import { InvitedTagBadge } from "../components/InvitedTagBadge";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
@@ -316,11 +317,19 @@ export function Leads() {
                     {displayBio && (
                       <p className="text-sm text-muted-foreground">{displayBio}</p>
                     )}
-                    {tag && (
-                      <Badge variant="outline" className="text-xs font-normal">
-                        {tag}
-                      </Badge>
-                    )}
+                    <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                      {tag && tag !== "Invited" && (
+                        <Badge variant="outline" className="text-xs font-normal">
+                          {tag}
+                        </Badge>
+                      )}
+                      <InvitedTagBadge
+                        table={sourceTable === "contacts" ? "doc_contacts" : "doc_dm_leads"}
+                        recordId={lead.id}
+                        tag={tag}
+                        queryKey={sourceTable === "contacts" ? ["contacts", currentOrgId] : ["dm-leads", currentOrgId]}
+                      />
+                    </div>
                     {Object.keys(customFields).length > 0 && (
                       <div className="flex flex-wrap gap-1 pt-1">
                         {Object.entries(customFields).map(([key, value]) => (

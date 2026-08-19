@@ -7,6 +7,7 @@ import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
 import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
 import { EditContactDialog } from "../components/EditContactDialog";
+import { InvitedTagBadge } from "../components/InvitedTagBadge";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -346,6 +347,7 @@ export function Contacts() {
                 <TableHead>Email</TableHead>
                 <TableHead>Connected</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Tag</TableHead>
                 <TableHead>Details</TableHead>
                 <TableHead>Last Contacted</TableHead>
                 <TableHead>Added</TableHead>
@@ -437,6 +439,19 @@ export function Contacts() {
                         ))}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {contact.tag && contact.tag !== "Invited" && (
+                        <Badge variant="outline">{contact.tag}</Badge>
+                      )}
+                      <InvitedTagBadge
+                        table="doc_contacts"
+                        recordId={contact.id}
+                        tag={contact.tag}
+                        queryKey={["contacts", currentOrgId]}
+                      />
+                    </div>
                   </TableCell>
                   <TableCell>
                     <CustomFieldsDialog
