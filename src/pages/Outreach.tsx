@@ -20,10 +20,17 @@ import {
   TableRow,
 } from "../components/ui/table";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import {
   Sparkles,
   ExternalLink,
   Loader2,
   CheckCircle2,
+  ChevronDown,
   Copy,
   SquareArrowOutUpRight,
   X,
@@ -337,6 +344,23 @@ export function Outreach() {
     },
   });
 
+  // Lets you change a lead's status (Pending/Invited/Messaged/Engaged)
+  // straight from Outreach, same as the Status dropdown on Scraped/Manual/
+  // Engaged Leads — writes to whichever table the lead lives in.
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ lead, status }: { lead: UnifiedLead; status: ContactStatus }) => {
+      const table = lead.sourceTable === "contacts" ? "doc_contacts" : "doc_dm_leads";
+      const { error } = await supabase.from(table).update({ status }).eq("id", lead.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Status updated");
+      queryClient.invalidateQueries({ queryKey: ["contacts", currentOrgId] });
+      queryClient.invalidateQueries({ queryKey: ["dm-leads", currentOrgId] });
+    },
+    onError: () => toast.error("Failed to update status"),
+  });
+
   async function openAndCopy(lead: UnifiedLead, message: string) {
     if (!message.trim()) {
       toast.error("Write or generate a message first");
@@ -489,9 +513,29 @@ export function Outreach() {
                     {l.filterType}
                   </Badge>
                   {l.tag && <Badge variant="outline">{l.tag}</Badge>}
-                  <Badge variant={l.status === "messaged" ? "default" : "outline"}>
-                    {l.status}
-                  </Badge>
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={<Button variant="ghost" size="sm" className="gap-1 h-7" />}
+                      >
+                        <Badge variant={l.status === "messaged" ? "default" : "outline"}>
+                          {l.status}
+                        </Badge>
+                        <ChevronDown className="h-3 w-3" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent>
+                        {STATUS_FILTER_OPTIONS.map((opt) => (
+                          <DropdownMenuItem
+                            key={opt.value}
+                            onClick={() => updateStatusMutation.mutate({ lead: l, status: opt.value })}
+                            disabled={l.status === opt.value}
+                          >
+                            {opt.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </span>
                 </label>
                 ))}
               </div>
@@ -597,6 +641,29 @@ export function Outreach() {
                             {lead.filterType}
                           </Badge>
                           {lead.tag && <Badge variant="outline">{lead.tag}</Badge>}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              render={<Button variant="ghost" size="sm" className="gap-1 h-7" />}
+                            >
+                              <Badge variant={lead.status === "messaged" ? "default" : "outline"}>
+                                {lead.status}
+                              </Badge>
+                              <ChevronDown className="h-3 w-3" />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent>
+                              {STATUS_FILTER_OPTIONS.map((opt) => (
+                                <DropdownMenuItem
+                                  key={opt.value}
+                                  onClick={() =>
+                                    updateStatusMutation.mutate({ lead, status: opt.value })
+                                  }
+                                  disabled={lead.status === opt.value}
+                                >
+                                  {opt.label}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                         {lead.linkedin_profile_url ? (
                           <a
