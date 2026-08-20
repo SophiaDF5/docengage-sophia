@@ -6,12 +6,17 @@ before deploying. Check each item after running it.
 ## Right now (pending as of 2026-08-19, updated)
 
 Migrations 010–013 should already be applied (the app has been running features that depend on
-them — tags, custom fields, account isolation — since mid-July). One new migration is pending:
+them — tags, custom fields, account isolation — since mid-July). Two new migrations are pending —
+run both, in order, in one SQL Editor session:
 
 - [ ] **Migration 014** — adds a `tag` column to `doc_dm_leads` (Engaged Leads), matching the one
-  `doc_contacts` already has. Needed for the new "Mark Invited" quick-tag button on the Outreach
-  page to work for Engaged leads, not just Scraped/Manual ones. See its section below.
-- [ ] Redeploy the frontend (`dist` folder) to Netlify after running it — that's the only other
+  `doc_contacts` already has. General freeform tag support (e.g. "YouTube") — not used for
+  "Invited" (see migration 015). See its section below.
+- [ ] **Migration 015** — adds `'invited'` as a fourth status value (pending → invited → messaged
+  → engaged) on both `doc_contacts` and `doc_dm_leads`. Without this, picking "Invited" from the
+  Status dropdown on Scraped/Manual/Engaged Leads, or filtering by it on Outreach, will fail with a
+  database constraint error. See its section below.
+- [ ] Redeploy the frontend (`dist` folder) to Netlify after running both — that's the only other
   step, no edge functions changed.
 
 <details>
@@ -250,6 +255,31 @@ Verify with:
 select column_name from information_schema.columns
 where table_name = 'doc_dm_leads' and column_name = 'tag';
 ```
+
+### Migration 015 — paste this into the SQL Editor, right after 014
+
+```sql
+begin;
+
+alter table public.doc_contacts drop constraint if exists doc_contacts_status_check;
+alter table public.doc_contacts
+  add constraint doc_contacts_status_check
+  check (status in ('pending', 'invited', 'messaged', 'engaged'));
+
+alter table public.doc_dm_leads drop constraint if exists doc_dm_leads_status_check;
+alter table public.doc_dm_leads
+  add constraint doc_dm_leads_status_check
+  check (status in ('pending', 'invited', 'messaged', 'engaged'));
+
+commit;
+```
+
+Verify with:
+```sql
+select conname, pg_get_constraintdef(oid) from pg_constraint
+where conname in ('doc_contacts_status_check', 'doc_dm_leads_status_check');
+```
+Both should show `'invited'` in the list of allowed values.
 
 ## Deploy edge functions
 

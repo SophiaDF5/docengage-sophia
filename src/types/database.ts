@@ -47,7 +47,10 @@ export interface CommentWithPost extends Comment {
   doc_posts: Post;
 }
 
-export type ContactStatus = "pending" | "messaged" | "engaged";
+// Lifecycle order: pending -> invited -> messaged -> engaged. "invited"
+// added in migration 015 (previously a separate freeform tag — see
+// doc_contacts.tag / doc_dm_leads.tag for other freeform labels).
+export type ContactStatus = "pending" | "invited" | "messaged" | "engaged";
 export type ContactSource = "scraped" | "manual";
 // Freeform key/value info a user attaches to a lead (title, company, phone,
 // specialty, etc.) — see migration 011. No fixed schema on purpose.
@@ -97,9 +100,10 @@ export interface DmLead {
   linkedin_profile_url: string | null;
   status: ContactStatus;
   custom_fields: CustomFields;
-  // Freeform label (e.g. "Invited") — see migration 014. Same tag vocabulary
+  // Freeform label (e.g. "YouTube") — see migration 014. Same tag vocabulary
   // as doc_contacts.tag, kept independent per table since each lead lives in
-  // exactly one of the two. Null means untagged.
+  // exactly one of the two. Null means untagged. Not used for "Invited"
+  // anymore — that's a status value now, see ContactStatus above.
   tag: string | null;
   last_contacted_at: string | null;
   created_at: string;

@@ -8,7 +8,6 @@ import { useOrganization } from "../hooks/useOrganization";
 import { AddContactDialog } from "../components/AddContactDialog";
 import { EditContactDialog } from "../components/EditContactDialog";
 import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
-import { InvitedTagBadge } from "../components/InvitedTagBadge";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -43,12 +42,14 @@ const UNTAGGED = "__untagged__";
 
 const STATUS_OPTIONS: { value: ContactStatus; label: string }[] = [
   { value: "pending", label: "Pending" },
+  { value: "invited", label: "Invited" },
   { value: "messaged", label: "Messaged" },
   { value: "engaged", label: "Engaged" },
 ];
 
 const statusBadgeVariant: Record<ContactStatus, "outline" | "default" | "secondary"> = {
   pending: "outline",
+  invited: "secondary",
   messaged: "default",
   engaged: "secondary",
 };
@@ -296,17 +297,11 @@ export function ManualLeads() {
                   </TableCell>
                   <TableCell className="font-medium">{contact.full_name}</TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-1 flex-wrap">
-                      {contact.tag && contact.tag !== "Invited" && (
-                        <Badge variant="outline">{contact.tag}</Badge>
-                      )}
-                      <InvitedTagBadge
-                        table="doc_contacts"
-                        recordId={contact.id}
-                        tag={contact.tag}
-                        queryKey={["contacts", currentOrgId]}
-                      />
-                    </div>
+                    {contact.tag ? (
+                      <Badge variant="outline">{contact.tag}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground truncate max-w-48">
                     {contact.headline ?? "—"}

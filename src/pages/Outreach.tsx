@@ -5,7 +5,6 @@ import { supabase } from "../lib/supabaseClient";
 import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
 import { useUnifiedLeads, type UnifiedLead, type FilterType } from "../hooks/useUnifiedLeads";
-import { InvitedTagBadge } from "../components/InvitedTagBadge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -42,6 +41,7 @@ const FILTER_OPTIONS: { value: FilterType; label: string }[] = [
 
 const STATUS_FILTER_OPTIONS: { value: ContactStatus; label: string }[] = [
   { value: "pending", label: "Pending" },
+  { value: "invited", label: "Invited" },
   { value: "messaged", label: "Messaged" },
   { value: "engaged", label: "Engaged" },
 ];
@@ -488,13 +488,7 @@ export function Outreach() {
                   <Badge variant="outline" className="capitalize">
                     {l.filterType}
                   </Badge>
-                  {l.tag && l.tag !== "Invited" && <Badge variant="outline">{l.tag}</Badge>}
-                  <InvitedTagBadge
-                    table={l.sourceTable === "contacts" ? "doc_contacts" : "doc_dm_leads"}
-                    recordId={l.id}
-                    tag={l.tag}
-                    queryKey={l.sourceTable === "contacts" ? ["contacts", currentOrgId] : ["dm-leads", currentOrgId]}
-                  />
+                  {l.tag && <Badge variant="outline">{l.tag}</Badge>}
                   <Badge variant={l.status === "messaged" ? "default" : "outline"}>
                     {l.status}
                   </Badge>
@@ -602,19 +596,7 @@ export function Outreach() {
                           <Badge variant="outline" className="capitalize">
                             {lead.filterType}
                           </Badge>
-                          {lead.tag && lead.tag !== "Invited" && (
-                            <Badge variant="outline">{lead.tag}</Badge>
-                          )}
-                          <InvitedTagBadge
-                            table={lead.sourceTable === "contacts" ? "doc_contacts" : "doc_dm_leads"}
-                            recordId={lead.id}
-                            tag={lead.tag}
-                            queryKey={
-                              lead.sourceTable === "contacts"
-                                ? ["contacts", currentOrgId]
-                                : ["dm-leads", currentOrgId]
-                            }
-                          />
+                          {lead.tag && <Badge variant="outline">{lead.tag}</Badge>}
                         </div>
                         {lead.linkedin_profile_url ? (
                           <a
@@ -696,18 +678,6 @@ export function Outreach() {
                           >
                             Mark as Sent
                           </Button>
-                          <div className="pt-0.5">
-                            <InvitedTagBadge
-                              table={lead.sourceTable === "contacts" ? "doc_contacts" : "doc_dm_leads"}
-                              recordId={lead.id}
-                              tag={lead.tag}
-                              queryKey={
-                                lead.sourceTable === "contacts"
-                                  ? ["contacts", currentOrgId]
-                                  : ["dm-leads", currentOrgId]
-                              }
-                            />
-                          </div>
                         </div>
                       </TableCell>
                     </TableRow>

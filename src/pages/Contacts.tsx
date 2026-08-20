@@ -7,7 +7,6 @@ import { callEdgeFunction } from "../lib/apiClient";
 import { useOrganization } from "../hooks/useOrganization";
 import { CustomFieldsDialog } from "../components/CustomFieldsDialog";
 import { EditContactDialog } from "../components/EditContactDialog";
-import { InvitedTagBadge } from "../components/InvitedTagBadge";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -63,6 +62,7 @@ function exportContactsCsv(list: Contact[]) {
 
 const STATUS_OPTIONS: { value: ContactStatus; label: string }[] = [
   { value: "pending", label: "Pending" },
+  { value: "invited", label: "Invited" },
   { value: "messaged", label: "Messaged" },
   { value: "engaged", label: "Engaged" },
 ];
@@ -74,6 +74,7 @@ const STATUS_FILTERS: { value: ContactStatus | "all"; label: string }[] = [
 
 const statusBadgeVariant: Record<ContactStatus, "outline" | "default" | "secondary"> = {
   pending: "outline",
+  invited: "secondary",
   messaged: "default",
   engaged: "secondary",
 };
@@ -347,7 +348,6 @@ export function Contacts() {
                 <TableHead>Email</TableHead>
                 <TableHead>Connected</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Tag</TableHead>
                 <TableHead>Details</TableHead>
                 <TableHead>Last Contacted</TableHead>
                 <TableHead>Added</TableHead>
@@ -439,19 +439,6 @@ export function Contacts() {
                         ))}
                       </DropdownMenuContent>
                     </DropdownMenu>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1 flex-wrap">
-                      {contact.tag && contact.tag !== "Invited" && (
-                        <Badge variant="outline">{contact.tag}</Badge>
-                      )}
-                      <InvitedTagBadge
-                        table="doc_contacts"
-                        recordId={contact.id}
-                        tag={contact.tag}
-                        queryKey={["contacts", currentOrgId]}
-                      />
-                    </div>
                   </TableCell>
                   <TableCell>
                     <CustomFieldsDialog
