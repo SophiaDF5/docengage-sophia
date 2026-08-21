@@ -2,6 +2,12 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 import { Button } from "../ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
+import {
   MessageSquare,
   Mail,
   UserCircle,
@@ -10,6 +16,7 @@ import {
   Send,
   Settings,
   LogOut,
+  Menu,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -30,12 +37,14 @@ export function AppLayout() {
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="flex h-14 items-center px-6">
-          <Link to="/" className="mr-6 font-semibold text-lg">
+        <div className="flex h-14 items-center px-4 sm:px-6">
+          <Link to="/" className="mr-4 sm:mr-6 font-semibold text-lg shrink-0">
             DocEngage
           </Link>
 
-          <nav className="flex items-center gap-1">
+          {/* Desktop nav — hidden below md, where it wouldn't fit (7 items
+              plus logo plus account info in one row). */}
+          <nav className="hidden md:flex items-center gap-1">
             {navItems.map((item) => {
               const isActive =
                 item.path === "/"
@@ -56,10 +65,34 @@ export function AppLayout() {
             })}
           </nav>
 
-          <div className="ml-auto flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">
+          <div className="ml-auto flex items-center gap-2 sm:gap-3">
+            <span className="hidden sm:inline text-sm text-muted-foreground truncate max-w-[160px]">
               {user?.email}
             </span>
+
+            {/* Mobile nav — a menu button that opens every page as a
+                dropdown, replacing the horizontal nav below md. */}
+            <div className="md:hidden">
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+                  <Menu className="h-5 w-5" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {navItems.map((item) => {
+                    const isActive =
+                      item.path === "/"
+                        ? location.pathname === "/"
+                        : location.pathname.startsWith(item.path);
+                    return (
+                      <DropdownMenuItem key={item.path} render={<Link to={item.path} />}>
+                        <item.icon className="h-4 w-4 mr-2" />
+                        <span className={cn(isActive && "font-medium")}>{item.label}</span>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
 
             <Button variant="ghost" size="sm" onClick={signOut}>
               <LogOut className="h-4 w-4" />
@@ -68,7 +101,7 @@ export function AppLayout() {
         </div>
       </header>
 
-      <main className="p-6">
+      <main className="p-4 sm:p-6">
         <Outlet />
       </main>
     </div>

@@ -191,7 +191,7 @@ function ToneSection({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h2 className="text-lg font-semibold">Tone & Voice</h2>
           <p className="text-sm text-muted-foreground">

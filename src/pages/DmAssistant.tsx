@@ -154,7 +154,7 @@ export function DmAssistant() {
                 rows={4}
                 className="text-sm"
               />
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <span className="text-xs text-muted-foreground">
                   {editedReply.length} characters
                 </span>

@@ -245,7 +245,7 @@ export function Contacts() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Scraped Leads</h1>
           <p className="text-sm text-muted-foreground mt-1">

@@ -117,7 +117,7 @@ function OutputArea({
           rows={4}
           className="text-sm"
         />
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <span className="text-xs text-muted-foreground">
             {edited.length} characters
           </span>
@@ -197,7 +197,7 @@ function CaptionMode({ orgId }: { orgId: string }) {
           rows={5}
         />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>Author Name</Label>
           <Input
@@ -317,7 +317,7 @@ function ImageMode({ orgId }: { orgId: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>Author Name</Label>
           <Input
