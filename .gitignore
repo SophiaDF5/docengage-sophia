@@ -33,6 +33,9 @@ dist-ssr
 # Supabase
 supabase/.temp/
 
+# Local backups (contain real lead data — never commit)
+backups/
+
 # Playwright
 test-results/
 playwright-report/

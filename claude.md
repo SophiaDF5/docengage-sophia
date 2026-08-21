@@ -222,6 +222,7 @@ it means a future access-model change (if one is ever needed again) stays just a
 ### Scripts
 - scripts/setup-integrations.md → Step-by-step credential setup for external integrations
 - scripts/create-account.mjs → Creates a new login (`node scripts/create-account.mjs <email> <password>`). Since migration 012 there's no manual org-insert step — creating the auth user is enough, the doc_on_auth_user_created trigger auto-creates their doc_organizations row. Uses SUPABASE_SERVICE_ROLE_KEY, local use only, never called from the app. Replaces the old pre-migration-012 manual "insert into doc_organizations + doc_organization_members" approach, which no longer works (that members table was dropped).
+- scripts/backup-leads.mjs → Manual backup safety net (`node scripts/backup-leads.mjs`), added after an accidental data-loss incident (a leftover ad-hoc "delete" script in the Supabase SQL Editor history got re-run and wiped doc_contacts/doc_dm_leads for one org). The account is on Supabase's free plan, which has no automatic backups or Point-in-Time Recovery, so this fills that gap. Dumps doc_organizations, doc_contacts, doc_dm_leads, doc_outreach_messages, and doc_dm_drafts to a single timestamped JSON file in `backups/` (gitignored — contains real lead PII, never commit it). Run manually and regularly, and always before doing any manual cleanup/deletion in the Supabase SQL Editor.
 
 ### Tests
 - tests/abuse-test.ts → Cross-account security tests (User A cannot see/modify User B's data)
