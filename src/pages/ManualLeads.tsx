@@ -366,7 +366,11 @@ export function ManualLeads() {
                         variant="ghost"
                         size="sm"
                         className="h-7 w-7 p-0"
-                        onClick={() => deleteMutation.mutate(contact.id)}
+                        onClick={() => {
+                          if (window.confirm(`Delete ${contact.full_name}? This can't be undone.`)) {
+                            deleteMutation.mutate(contact.id);
+                          }
+                        }}
                         disabled={deleteMutation.isPending}
                       >
                         <Trash2 className="h-3.5 w-3.5" />

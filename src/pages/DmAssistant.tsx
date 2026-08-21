@@ -260,7 +260,11 @@ function DmHistory({ orgId }: { orgId: string }) {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => deleteMutation.mutate(item.id)}
+                onClick={() => {
+                  if (window.confirm("Delete this draft? This can't be undone.")) {
+                    deleteMutation.mutate(item.id);
+                  }
+                }}
                 disabled={deleteMutation.isPending}
               >
                 <Trash2 className="h-3 w-3 mr-1" />

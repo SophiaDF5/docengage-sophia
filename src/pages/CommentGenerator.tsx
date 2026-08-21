@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabaseClient";
@@ -73,11 +73,16 @@ function OutputArea({
   onRegenerate: () => void;
 }) {
   const [edited, setEdited] = useState(content ?? "");
-
-  // Sync when new content arrives
-  useEffect(() => {
+  // Tracks the last `content` we've synced from, so a fresh AI regeneration
+  // (new `content`) resets the editable text, but the user's own typing
+  // afterward doesn't get clobbered on every re-render. Adjusting state
+  // during render (React's recommended pattern) instead of useEffect avoids
+  // an extra render pass and a "Calling setState() in an effect" lint error.
+  const [syncedContent, setSyncedContent] = useState(content);
+  if (content !== syncedContent) {
+    setSyncedContent(content);
     if (content) setEdited(content);
-  }, [content]);
+  }
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(edited);
@@ -379,11 +384,13 @@ function ImageMode({ orgId }: { orgId: string }) {
 
 function CommentHistory({ orgId }: { orgId: string }) {
   const queryClient = useQueryClient();
-  const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
 
   const historyQuery = useQuery({
     queryKey: ["comment-history", orgId],
     queryFn: async () => {
+      // Computed fresh on every fetch (not during render) — avoids calling
+      // the impure Date.now() while the component renders.
+      const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
       await supabase
         .from("doc_comments")
         .delete()
@@ -457,7 +464,11 @@ function CommentHistory({ orgId }: { orgId: string }) {
                 variant="ghost"
                 size="sm"
                 className="text-destructive hover:text-destructive"
-                onClick={() => deleteMutation.mutate(item.id)}
+                onClick={() => {
+                  if (window.confirm("Delete this comment? This can't be undone.")) {
+                    deleteMutation.mutate(item.id);
+                  }
+                }}
                 disabled={deleteMutation.isPending}
               >
                 <Trash2 className="h-3 w-3 mr-1" />
