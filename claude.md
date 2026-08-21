@@ -221,6 +221,7 @@ it means a future access-model change (if one is ever needed again) stays just a
 
 ### Scripts
 - scripts/setup-integrations.md → Step-by-step credential setup for external integrations
+- scripts/create-account.mjs → Creates a new login (`node scripts/create-account.mjs <email> <password>`). Since migration 012 there's no manual org-insert step — creating the auth user is enough, the doc_on_auth_user_created trigger auto-creates their doc_organizations row. Uses SUPABASE_SERVICE_ROLE_KEY, local use only, never called from the app. Replaces the old pre-migration-012 manual "insert into doc_organizations + doc_organization_members" approach, which no longer works (that members table was dropped).
 
 ### Tests
 - tests/abuse-test.ts → Cross-account security tests (User A cannot see/modify User B's data)
