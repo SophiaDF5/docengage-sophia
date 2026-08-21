@@ -58,13 +58,13 @@ export function Outreach() {
   const queryClient = useQueryClient();
 
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-  const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(
-    new Set(["scraped", "engaged", "manual"])
-  );
-  // Empty set = no restriction (show every status / every tag). Clicking a
-  // chip adds a restriction; clicking it again removes it. This is separate
-  // from activeFilters (source) so you can combine "Manual Added" + tag
-  // "YouTube" + "Pending only" + a name search all at once.
+  // Empty set = no restriction (show every source / status / tag). Clicking
+  // a chip adds a restriction; clicking it again removes it. All three
+  // filter rows (Source, Status, Tag) use this same rule so they behave
+  // consistently — none of them start "all selected," because deselecting
+  // every chip in that state would silently show zero leads with no
+  // explanation (this used to happen on Source specifically — fixed).
+  const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(new Set());
   const [activeStatusFilters, setActiveStatusFilters] = useState<Set<ContactStatus>>(new Set());
   const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(new Set());
   const [searchText, setSearchText] = useState("");
@@ -86,7 +86,7 @@ export function Outreach() {
   // scope after the source filter, so the tag chip list doesn't show tags
   // that don't apply to the sources you've already narrowed down to.
   const sourceFilteredLeads = useMemo(
-    () => allLeads.filter((l) => activeFilters.has(l.filterType)),
+    () => (activeFilters.size === 0 ? allLeads : allLeads.filter((l) => activeFilters.has(l.filterType))),
     [allLeads, activeFilters]
   );
 
@@ -158,9 +158,13 @@ export function Outreach() {
   }
 
   const hasActiveRefinement =
-    activeStatusFilters.size > 0 || activeTagFilters.size > 0 || searchText.trim() !== "";
+    activeFilters.size > 0 ||
+    activeStatusFilters.size > 0 ||
+    activeTagFilters.size > 0 ||
+    searchText.trim() !== "";
 
   function clearRefinements() {
+    setActiveFilters(new Set());
     setActiveStatusFilters(new Set());
     setActiveTagFilters(new Set());
     setSearchText("");
@@ -415,6 +419,9 @@ export function Outreach() {
                 {opt.label}
               </Badge>
             ))}
+            <span className="text-xs text-muted-foreground">
+              {activeFilters.size === 0 ? "(showing all)" : ""}
+            </span>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -464,7 +471,7 @@ export function Outreach() {
 
           {hasActiveRefinement && (
             <Button variant="ghost" size="sm" onClick={clearRefinements} className="h-7 -ml-2">
-              <X className="h-3.5 w-3.5 mr-1" /> Clear status/tag/search filters
+              <X className="h-3.5 w-3.5 mr-1" /> Clear all filters
             </Button>
           )}
 
