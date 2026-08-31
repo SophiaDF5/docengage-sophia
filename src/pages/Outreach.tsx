@@ -44,6 +44,7 @@ const FILTER_OPTIONS: { value: FilterType; label: string }[] = [
   { value: "scraped", label: "Scraped" },
   { value: "engaged", label: "Engaged" },
   { value: "manual", label: "Manual Added" },
+  { value: "keyword_search", label: "Keyword Search" },
 ];
 
 const STATUS_FILTER_OPTIONS: { value: ContactStatus; label: string }[] = [
@@ -54,7 +55,7 @@ const STATUS_FILTER_OPTIONS: { value: ContactStatus; label: string }[] = [
 ];
 
 export function Outreach() {
-  const { currentOrgId } = useOrganization();
+  const { currentOrgId, isLoading: isOrgLoading } = useOrganization();
   const queryClient = useQueryClient();
 
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
@@ -377,10 +378,14 @@ export function Outreach() {
     toast.success("Message copied — paste it into LinkedIn, then click Mark as Sent");
   }
 
+  if (isOrgLoading) {
+    return <p className="text-sm text-muted-foreground">Loading...</p>;
+  }
+
   if (!currentOrgId) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No organization selected.
+        No account found.
       </div>
     );
   }

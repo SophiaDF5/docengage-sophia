@@ -73,9 +73,12 @@ Save this value — you'll use it in both Make.com and Supabase.
 
 ## 3. Apify API Key (LinkedIn lead scraper)
 
-Powers the "Scrape Commenters" button on the Contacts page (`doc_scrape_post_commenters`),
-which pulls doctor leads from LinkedIn post commenters via the HarvestAPI
-`linkedin-post-comments` actor.
+Powers three things, all using the same `APIFY_API_KEY` secret:
+- the "Scrape Commenters" button on the Contacts page (`doc_scrape_post_commenters`), which pulls
+  doctor leads from LinkedIn post commenters via the HarvestAPI `linkedin-post-comments` actor
+- the "Find Emails" button (`doc_enrich_emails`), via the HarvestAPI `linkedin-profile-scraper` actor
+- the Keyword Search page (`doc_search_keyword_leads`), which finds doctors/healthcare leads
+  currently posting about a topic via the HarvestAPI `linkedin-post-search` actor
 
 1. Go to [console.apify.com/account/integrations](https://console.apify.com/account/integrations)
 2. Copy your personal API token

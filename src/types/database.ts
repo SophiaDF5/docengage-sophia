@@ -51,7 +51,10 @@ export interface CommentWithPost extends Comment {
 // added in migration 015 (previously a separate freeform tag — see
 // doc_contacts.tag / doc_dm_leads.tag for other freeform labels).
 export type ContactStatus = "pending" | "invited" | "messaged" | "engaged";
-export type ContactSource = "scraped" | "manual";
+// 'keyword_search' added in migration 016 — leads found by searching a
+// keyword/topic on LinkedIn (see doc_search_keyword_leads), as opposed to
+// 'scraped' (commenters off one known post URL) or 'manual' (added by hand).
+export type ContactSource = "scraped" | "manual" | "keyword_search";
 // Freeform key/value info a user attaches to a lead (title, company, phone,
 // specialty, etc.) — see migration 011. No fixed schema on purpose.
 export type CustomFields = Record<string, string>;
@@ -72,6 +75,13 @@ export interface Contact {
   // see migration 013. Only meaningful for source='manual' rows in practice,
   // but not enforced. Null means untagged.
   tag: string | null;
+  // The keyword/topic search that surfaced this lead, plus a snapshot of the
+  // post that matched — only populated for source='keyword_search' rows.
+  // See migration 016 / doc_search_keyword_leads.
+  matched_keyword: string | null;
+  source_post_url: string | null;
+  source_post_excerpt: string | null;
+  source_post_date: string | null;
   last_contacted_at: string | null;
   created_at: string;
   updated_at: string;

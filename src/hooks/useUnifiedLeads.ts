@@ -5,7 +5,7 @@ import { supabase } from "../lib/supabaseClient";
 import type { Contact, ContactStatus, DmLead } from "../types/database";
 
 export type SourceTable = "contacts" | "dm_leads";
-export type FilterType = "scraped" | "manual" | "engaged";
+export type FilterType = "scraped" | "manual" | "engaged" | "keyword_search";
 
 export interface UnifiedLead {
   key: string; // `${sourceTable}:${id}`
@@ -74,7 +74,8 @@ export function useUnifiedLeads(orgId: string | null) {
       key: `contacts:${c.id}`,
       id: c.id,
       sourceTable: "contacts",
-      filterType: c.source === "scraped" ? "scraped" : "manual",
+      filterType:
+        c.source === "scraped" ? "scraped" : c.source === "keyword_search" ? "keyword_search" : "manual",
       full_name: c.full_name,
       linkedin_profile_url: c.linkedin_profile_url,
       headline: c.headline,

@@ -55,7 +55,7 @@ const statusBadgeVariant: Record<ContactStatus, "outline" | "default" | "seconda
 };
 
 export function ManualLeads() {
-  const { currentOrgId } = useOrganization();
+  const { currentOrgId, isLoading: isOrgLoading } = useOrganization();
   const queryClient = useQueryClient();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [tagFilter, setTagFilter] = useState<string>("all");
@@ -179,10 +179,14 @@ export function ManualLeads() {
     },
   });
 
+  if (isOrgLoading) {
+    return <p className="text-sm text-muted-foreground">Loading...</p>;
+  }
+
   if (!currentOrgId) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No organization selected.
+        No account found.
       </div>
     );
   }

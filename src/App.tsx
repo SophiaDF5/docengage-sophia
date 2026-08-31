@@ -12,6 +12,7 @@ import { DmAssistant } from "./pages/DmAssistant";
 import { Leads } from "./pages/Leads";
 import { Contacts } from "./pages/Contacts";
 import { ManualLeads } from "./pages/ManualLeads";
+import { KeywordSearch } from "./pages/KeywordSearch";
 import { Outreach } from "./pages/Outreach";
 import { Settings } from "./pages/Settings";
 
@@ -62,6 +63,7 @@ function AppRoutes() {
         <Route path="/leads" element={<Leads />} />
         <Route path="/contacts" element={<Contacts />} />
         <Route path="/manual-leads" element={<ManualLeads />} />
+        <Route path="/keyword-search" element={<KeywordSearch />} />
         <Route path="/outreach" element={<Outreach />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

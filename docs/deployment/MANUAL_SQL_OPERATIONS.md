@@ -3,21 +3,19 @@
 SQL operations that must be run manually in the Supabase SQL Editor per environment
 before deploying. Check each item after running it.
 
-## Right now (pending as of 2026-08-19, updated)
+## Right now (pending as of 2026-08-31, updated)
 
-Migrations 010–013 should already be applied (the app has been running features that depend on
-them — tags, custom fields, account isolation — since mid-July). Two new migrations are pending —
-run both, in order, in one SQL Editor session:
+Migrations 010–015 should already be applied (tags, custom fields, account isolation, and the
+Invited status have all been live since before this update). One new migration is pending for the
+new Keyword Search feature:
 
-- [ ] **Migration 014** — adds a `tag` column to `doc_dm_leads` (Engaged Leads), matching the one
-  `doc_contacts` already has. General freeform tag support (e.g. "YouTube") — not used for
-  "Invited" (see migration 015). See its section below.
-- [ ] **Migration 015** — adds `'invited'` as a fourth status value (pending → invited → messaged
-  → engaged) on both `doc_contacts` and `doc_dm_leads`. Without this, picking "Invited" from the
-  Status dropdown on Scraped/Manual/Engaged Leads, or filtering by it on Outreach, will fail with a
-  database constraint error. See its section below.
-- [ ] Redeploy the frontend (`dist` folder) to Netlify after running both — that's the only other
-  step, no edge functions changed.
+- [ ] **Migration 016** — adds `'keyword_search'` as a third value on `doc_contacts.source`, plus
+  `matched_keyword`/`source_post_url`/`source_post_excerpt`/`source_post_date` columns. Without
+  this, saving a lead from the new Keyword Search page will fail with a database constraint error.
+  See its section below.
+- [ ] Deploy the new edge function: `doc_search_keyword_leads` (see "Deploy edge functions" below).
+- [ ] Redeploy the frontend (`dist` folder) to Netlify after both of the above — the new "Keyword
+  Search" nav item and page won't work without the migration + function in place first.
 
 <details>
 <summary>Migrations 010–013 (should already be applied — expand only if you're not sure)</summary>
@@ -281,6 +279,36 @@ where conname in ('doc_contacts_status_check', 'doc_dm_leads_status_check');
 ```
 Both should show `'invited'` in the list of allowed values.
 
+### Migration 016 — paste this into the SQL Editor, right after 015
+
+```sql
+begin;
+
+alter table public.doc_contacts drop constraint if exists doc_contacts_source_check;
+alter table public.doc_contacts
+  add constraint doc_contacts_source_check
+  check (source in ('scraped', 'manual', 'keyword_search'));
+
+alter table public.doc_contacts add column if not exists matched_keyword text;
+alter table public.doc_contacts add column if not exists source_post_url text;
+alter table public.doc_contacts add column if not exists source_post_excerpt text;
+alter table public.doc_contacts add column if not exists source_post_date timestamptz;
+
+commit;
+```
+
+Verify with:
+```sql
+select conname, pg_get_constraintdef(oid) from pg_constraint
+where conname = 'doc_contacts_source_check';
+
+select column_name from information_schema.columns
+where table_name = 'doc_contacts'
+  and column_name in ('matched_keyword', 'source_post_url', 'source_post_excerpt', 'source_post_date');
+```
+The first query should show `'keyword_search'` in the list of allowed values; the second should
+return all four column names.
+
 ## Deploy edge functions
 
 Run these from the project root on your own machine (not in this chat — CLI auth tokens should
@@ -291,6 +319,7 @@ source .env
 npx supabase functions deploy doc_enrich_emails --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_enrich_emails_apollo --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_scrape_post_commenters --project-ref ijyhyozksijymweikkrm
+npx supabase functions deploy doc_search_keyword_leads --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_inbound_post --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_approve_comment --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_process_tone --project-ref ijyhyozksijymweikkrm
@@ -349,6 +378,9 @@ without them, the build produces a broken bundle (this was one of the causes of 
 - [ ] Outreach page's "1. Choose your leads" step has no upload button — only filter chips.
 - [ ] On Manual Added Leads, click "Upload Leads", type a tag (e.g. "Test"), upload a small
   CSV/Excel, confirm the leads import and a matching filter chip appears automatically.
+- [ ] On the new Keyword Search page, search a broad healthcare-adjacent keyword, confirm results
+  appear with a working "View their post" link, select one, save it, and confirm it shows up both
+  in the "Saved from Keyword Search" table below and under the "Keyword Search" filter on Outreach.
 
 ## Production (original checklist — already applied)
 

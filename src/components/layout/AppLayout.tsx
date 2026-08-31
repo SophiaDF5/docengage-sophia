@@ -17,6 +17,7 @@ import {
   Settings,
   LogOut,
   Menu,
+  Search,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -26,6 +27,7 @@ const navItems = [
   { path: "/leads", label: "Engaged Leads", icon: UserCircle },
   { path: "/contacts", label: "Scraped Leads", icon: Users },
   { path: "/manual-leads", label: "Manual Added", icon: UserPlus },
+  { path: "/keyword-search", label: "Keyword Search", icon: Search },
   { path: "/outreach", label: "Outreach", icon: Send },
   { path: "/settings", label: "Settings", icon: Settings },
 ];

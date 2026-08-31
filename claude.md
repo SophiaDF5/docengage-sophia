@@ -188,6 +188,7 @@ it means a future access-model change (if one is ever needed again) stays just a
 - supabase/migrations/013_add_contact_tags.sql → Adds `tag` text column to doc_contacts — freeform label set at upload/add time (e.g. "YouTube"), drives the dynamic filter chips on the Manual Added Leads page
 - supabase/migrations/014_add_tag_to_dm_leads.sql → Adds `tag` text column to doc_dm_leads, mirroring doc_contacts.tag — general freeform label support for Engaged leads (e.g. "YouTube"). Not used for "Invited" — see migration 015.
 - supabase/migrations/015_add_invited_status.sql → Adds `'invited'` as a fourth allowed value (pending → invited → messaged → engaged) to the status CHECK constraint on both doc_contacts and doc_dm_leads. Replaces an earlier tag-based "Invited" approach — it's now a status you pick from the same Status dropdown as Pending/Messaged/Engaged, and filterable the same way in Outreach's Status row.
+- supabase/migrations/016_add_keyword_search.sql → Adds `'keyword_search'` as a third allowed value on doc_contacts.source (alongside 'scraped'/'manual'), plus `matched_keyword`, `source_post_url`, `source_post_excerpt`, `source_post_date` columns — supports the Keyword Search page/feature (see doc_search_keyword_leads).
 
 ### Deployment
 - docs/deployment/MANUAL_SQL_OPERATIONS.md  → Manual SQL that must be run
@@ -199,6 +200,7 @@ it means a future access-model change (if one is ever needed again) stays just a
 - supabase/functions/doc_process_tone/index.ts    → Processes media via Whisper, updates org system prompt
 - supabase/functions/doc_daily_followups/index.ts → Documented but not yet built — no directory exists in the repo. Skip when deploying; there's nothing to deploy yet.
 - supabase/functions/doc_scrape_post_commenters/index.ts → Lead scraper: pulls LinkedIn post commenters via Apify (HarvestAPI actor), filters for healthcare keywords, upserts doc_contacts
+- supabase/functions/doc_search_keyword_leads/index.ts → Keyword/topic lead finder: searches LinkedIn posts by keyword via Apify (HarvestAPI `linkedin-post-search` actor, past week, max 50 posts/search), filters authors for healthcare keywords (same list as doc_scrape_post_commenters, duplicated not shared), and returns a preview list — does NOT write to the database. The frontend (KeywordSearch.tsx) lets the user pick which results to save, then inserts those directly into doc_contacts with `source: 'keyword_search'` (same "insert straight from the client" pattern as AddContactDialog, not a second edge function)
 - supabase/functions/doc_enrich_emails/index.ts → Attempts to find emails for existing doc_contacts via a second Apify actor (HarvestAPI profile+email search) — partial coverage only, not guaranteed per lead
 - supabase/functions/doc_enrich_emails_apollo/index.ts → Second-attempt email finder via Apollo.io People Enrichment API — deliberately separate button/cap (max 20) from doc_enrich_emails since Apollo credits are much scarcer
 - supabase/functions/doc_generate_comment/index.ts → Drafts the AI comment for a post (used by doc_inbound_post and manual regeneration from the Comments dashboard); reads doc_organizations.ai_system_prompt for tone
@@ -208,6 +210,7 @@ it means a future access-model change (if one is ever needed again) stays just a
 - src/pages/CommentGenerator.tsx → "Comments" page (route `/`). Drafts a LinkedIn comment from a pasted caption or an uploaded screenshot, plus a history of recent comments. If you fill in Author Name + LinkedIn URL, that person is saved into `doc_dm_leads` (Engaged Leads) with `status = 'engaged'` on generation (commenting on their post counts as engaging with them) — skipped if a lead with that LinkedIn URL already exists.
 - src/pages/Contacts.tsx      → "Scraped Leads" page. CRM pipeline of doctors identified via the scraper only (`source = 'scraped'`). Manually added leads live on the Manual Added Leads page instead, though both read/write the same doc_contacts table and `["contacts", orgId]` query key. Select leads without an email (max 50) to run doc_enrich_emails, or (max 20) to run doc_enrich_emails_apollo as a second attempt; export filtered view to CSV
 - src/pages/ManualLeads.tsx   → "Manual Added Leads" page. Shows doc_contacts rows where `source = 'manual'` — added one-by-one via AddContactDialog, or via CSV/Excel upload (`UploadLeadsDialog`, defined in this file). Both let you set a freeform `tag` (e.g. "YouTube") on the lead(s); the page's filter chips are built dynamically from whatever distinct `tag` values currently exist — no fixed list. Supports status changes, delete, and the same email-enrichment (Find Emails) flow as Scraped Leads. Shares the `["contacts", orgId]` query key so status stays in sync with Scraped Leads and Outreach.
+- src/pages/KeywordSearch.tsx → "Keyword Search" page. Type a topic (e.g. "AI and healthcare") → calls doc_search_keyword_leads → shows a preview list (name, headline, their post + link, posted date) with checkboxes, nothing saved yet. Selecting leads and clicking "Save Selected as Leads" upserts them into doc_contacts with `source = 'keyword_search'`, `matched_keyword`, and the post context (`source_post_url`/`source_post_excerpt`/`source_post_date`) — see migration 016. Below the search box, a second table shows everything already saved this way (own the `source = 'keyword_search'` rows, mirroring how Scraped Leads owns `'scraped'` and Manual Added Leads owns `'manual'`), with the same Status dropdown/CustomFieldsDialog/EditContactDialog/delete-with-confirm pattern as those pages, sharing `["contacts", orgId]` for the same cross-page sync.
 - src/pages/Settings.tsx      → Account settings (name, AI tone/system prompt), tone sample uploads. No team/member management — see "Account model" above.
 - src/pages/DmAssistant.tsx   → AI-drafted DM replies/openers for one conversation at a time, backed by doc_dm_drafts history
 - src/pages/Leads.tsx         → "Engaged Leads" page. Manually curated lead list (name/bio/LinkedIn URL) feeding DM Assistant context, backed by doc_dm_leads — has its own status pipeline (pending/messaged/engaged) matching doc_contacts. Also merges in (read-only structurally, but fully editable) any doc_contacts row — Scraped or Manual — whose `status` is `messaged` or `engaged`, using the same `["contacts", orgId]` query key as Scraped/Manual Added Leads. This is a display-time merge, not a data copy: there's still exactly one row per lead, status changes and custom fields write back to whichever table it actually lives in, and setting a merged-in lead's status back to `pending` just makes it disappear from this page (no delete needed). Deleting a merged-in lead is only available from its home page (Scraped Leads / Manual Added Leads), to avoid the appearance of two separate records for one person.
@@ -313,9 +316,13 @@ imported via the Manual Added Leads page's CSV/Excel upload (also tagged `source
 | email | text | (written only by doc_enrich_emails / doc_enrich_emails_apollo) |
 | is_connected | boolean | not null, default false |
 | status | text | not null, default 'pending', check in ('pending', 'invited', 'messaged', 'engaged') — 'invited' added in migration 015 |
-| source | text | not null, default 'scraped', check in ('scraped', 'manual') — added in migration 010 |
+| source | text | not null, default 'scraped', check in ('scraped', 'manual', 'keyword_search') — added in migration 010, 'keyword_search' added in migration 016 |
 | custom_fields | jsonb | not null, default '{}' — freeform key/value lead info (title, company, etc.), added in migration 011 |
 | tag | text | freeform label set at upload/add time (e.g. "YouTube"), added in migration 013 — drives Manual Added Leads' dynamic filter chips |
+| matched_keyword | text | the keyword/topic search that surfaced this lead, added in migration 016 — only populated for `source = 'keyword_search'` |
+| source_post_url | text | the specific LinkedIn post that matched the keyword search, added in migration 016 |
+| source_post_excerpt | text | snippet (first 500 chars) of that post's content, added in migration 016 |
+| source_post_date | timestamptz | when that post was published, added in migration 016 |
 | last_contacted_at | timestamptz | |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
@@ -534,6 +541,42 @@ new query key for the same underlying table.
   return a "successful" run with 0 items — the response includes `run_url` and a `warning` string
   so this is visible in the UI instead of silently returning zero saved leads.
 
+### doc_search_keyword_leads
+- Method: POST
+- Rate limit tier: expensive
+- Input schema:
+  ```typescript
+  z.object({
+    org_id: z.string().uuid(),
+    keyword: z.string().trim().min(2).max(200),
+  })
+  ```
+- Success response (200):
+  ```json
+  { "data": { "keyword": "string", "total_items": number, "matched_leads": [{ "name": "string", "profileUrl": "string", "headline": "string", "postUrl": "string", "postExcerpt": "string", "postedAt": "string | null" }], "run_url": "string", "warning": "string | null" } }
+  ```
+- Error responses:
+  - 400: Invalid input (keyword too short/long)
+  - 401: Missing/invalid JWT
+  - 429: Rate limit exceeded
+  - 500: Sanitized message (e.g. Apify key not configured, Apify run failed)
+  - 504: Search timed out (120s poll budget)
+- Tables touched: None — this function only searches and returns a preview; it never writes to the database
+- External calls: Apify (`harvestapi~linkedin-post-search` actor) — see Section 6.5
+- Notes: Powers the Keyword Search page. Searches LinkedIn posts matching `keyword` from the past week
+  (`postedLimit: "week"`), sorted by date, capped at 50 posts per search (`maxPosts: 50`) — these are
+  hardcoded server-side, not client-controlled, same reasoning as doc_scrape_post_commenters hardcoding
+  `maxItems`. Filters matched post authors against the same healthcare/physician keyword list used by
+  doc_scrape_post_commenters (duplicated in this function, not shared — if you update one keyword list,
+  update both). Because nothing is written to the database here, there's no RLS/org-scoping concern for
+  this function itself; `org_id` is accepted for contract consistency with the app's other Apify-calling
+  functions but isn't otherwise used. The frontend does the actual save as a plain authenticated
+  `doc_contacts` upsert (`source: 'keyword_search'`), same pattern as AddContactDialog's manual-add insert.
+  HarvestAPI's output schema for this actor wasn't fully visible in its public docs when this was built
+  (only the input schema was) — response parsing tries a couple of likely field-name paths defensively,
+  same caveat as doc_enrich_emails_apollo's email-field parsing. Worth checking `_debug_first_item` in the
+  response against a real search on first use.
+
 ### doc_enrich_emails
 - Method: POST
 - Rate limit tier: expensive
@@ -697,6 +740,40 @@ await fetch(runUrl, {
 - Expose the credential in any response body or log
 - Rename the `posts` / `maxItems` fields without checking the actor's current input schema first
   — an unrecognized field name fails silently (the run "succeeds" with 0 items) rather than erroring
+
+### Apify (HarvestAPI linkedin-post-search actor — keyword lead search)
+- Research source: https://apify.com/harvestapi/linkedin-post-search/input-schema
+- Base URL: `https://api.apify.com/v2/`
+- Auth method: same `APIFY_API_KEY` as the other two HarvestAPI actors, reused across all three
+- Called from edge function(s): `doc_search_keyword_leads`
+- Trigger: User action (typing a keyword and clicking "Search" on the Keyword Search page)
+- Rate limit: Apify plan-dependent; app-side limited by the `expensive` rate limit tier
+
+**Outbound request shape (start run):**
+```typescript
+const runUrl = `https://api.apify.com/v2/acts/harvestapi~linkedin-post-search/runs?token=${apifyToken}&waitForFinish=0`;
+await fetch(runUrl, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    searchQueries: [keyword],
+    maxPosts: 50,
+    postedLimit: "week",
+    sortBy: "date",
+    scrapeReactions: false,
+    scrapeComments: false,
+  }),
+});
+```
+
+**Never:**
+- Call this API from the frontend
+- Expose the credential in any response body or log
+- Let `maxPosts`/`postedLimit` be set from client input — they're hardcoded server-side on purpose to
+  bound cost per search
+- Assume the exact output field names without checking a real run first — the actor's public docs only
+  showed the input schema when this was built, not the output shape; `doc_search_keyword_leads` parses
+  defensively and logs `_debug_first_item` for this reason
 
 ### Apify (HarvestAPI linkedin-profile-scraper actor — email enrichment)
 - Research source: https://apify.com/harvestapi/linkedin-profile-scraper/api/openapi
