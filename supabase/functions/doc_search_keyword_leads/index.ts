@@ -54,34 +54,40 @@ function isDoctorLead(name: string, headline: string): boolean {
 }
 
 // HarvestAPI's linkedin-post-search output shape wasn't fully documented in
-// the actor's public input-schema page (only the input fields were), so —
-// same as doc_enrich_emails_apollo's email-field parsing — this checks a
-// few likely field-name paths defensively. Worth double-checking against a
-// real run's dataset item on first use and tightening once confirmed.
+// the actor's public input-schema page when this was first built (only the
+// input fields were shown there) — confirmed since against HarvestAPI's own
+// documented sample output (apify.com/harvestapi/linkedin-post-search
+// README, "Sample output data"). Two things were wrong from the original
+// guess, both fixed here:
+//   1. `postedAt` is NOT a plain date string — it's an object
+//      { timestamp, date, postedAgoShort, postedAgoText }. The real ISO
+//      date is at `postedAt.date`. Handing the whole object to `new Date()`
+//      is exactly what produced "Invalid Date" in the UI.
+//   2. The author's headline/title is `author.info`, not `position` or
+//      `headline` (neither of those fields exist on the real response).
+//      Since it was always blank, isDoctorLead() below could only ever
+//      match on the person's NAME containing a medical keyword — which is
+//      why almost everything got filtered out even when real physicians
+//      were in the results.
 interface ApifyPost {
-  url?: string;
-  postUrl?: string;
   linkedinUrl?: string;
   content?: string;
-  text?: string;
-  commentary?: string;
-  postedAt?: string;
-  publishedAt?: string;
-  postedAtISO?: string;
-  date?: string;
-  author?: { name?: string; linkedinUrl?: string; position?: string; headline?: string };
-  actor?: { name?: string; linkedinUrl?: string; position?: string; headline?: string };
+  postedAt?: { date?: string; timestamp?: number; postedAgoText?: string } | string;
+  author?: { name?: string; linkedinUrl?: string; info?: string };
 }
 
 function extractPost(item: ApifyPost) {
-  const authorObj = item.author ?? item.actor ?? {};
+  const author = item.author ?? {};
+  const postedAt =
+    typeof item.postedAt === "string" ? item.postedAt : item.postedAt?.date ?? null;
+
   return {
-    name: authorObj.name ?? "",
-    profileUrl: authorObj.linkedinUrl ?? "",
-    headline: authorObj.position ?? authorObj.headline ?? "",
-    postUrl: item.url ?? item.postUrl ?? item.linkedinUrl ?? "",
-    content: item.content ?? item.text ?? item.commentary ?? "",
-    postedAt: item.postedAt ?? item.publishedAt ?? item.postedAtISO ?? item.date ?? null,
+    name: author.name ?? "",
+    profileUrl: author.linkedinUrl ?? "",
+    headline: author.info ?? "",
+    postUrl: item.linkedinUrl ?? "",
+    content: item.content ?? "",
+    postedAt,
   };
 }
 

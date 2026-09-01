@@ -48,6 +48,14 @@ const statusBadgeVariant: Record<ContactStatus, "outline" | "default" | "seconda
   engaged: "secondary",
 };
 
+// Defensive: never render the literal string "Invalid Date" if a date ever
+// comes through malformed or in a format we don't expect — show "—" instead.
+function formatDate(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString();
+}
+
 interface MatchedLead {
   name: string;
   profileUrl: string;
@@ -301,7 +309,7 @@ export function KeywordSearch() {
                       {lead.postExcerpt || "—"}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                      {lead.postedAt ? new Date(lead.postedAt).toLocaleDateString() : "—"}
+                      {formatDate(lead.postedAt)}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">

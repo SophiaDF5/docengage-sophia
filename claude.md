@@ -605,10 +605,14 @@ new query key for the same underlying table.
   this function itself; `org_id` is accepted for contract consistency with the app's other Apify-calling
   functions but isn't otherwise used. The frontend does the actual save as a plain authenticated
   `doc_contacts` upsert (`source: 'keyword_search'`), same pattern as AddContactDialog's manual-add insert.
-  HarvestAPI's output schema for this actor wasn't fully visible in its public docs when this was built
-  (only the input schema was) — response parsing tries a couple of likely field-name paths defensively,
-  same caveat as doc_enrich_emails_apollo's email-field parsing. Worth checking `_debug_first_item` in the
-  response against a real search on first use.
+  HarvestAPI's output schema wasn't visible in its public docs when this was first built (only the input
+  schema was), so the initial field-name guesses were wrong in two ways — confirmed and fixed against
+  HarvestAPI's own documented sample output: `postedAt` is an object (`{ date, timestamp, postedAgoText }`,
+  not a plain string — the real ISO date is `postedAt.date`), and the author's headline is `author.info`,
+  not `position`/`headline`. The wrong headline field meant the healthcare-keyword filter below could only
+  ever match on the person's NAME, silently rejecting almost every real match — this is why early users saw
+  very few results and "Invalid Date." `_debug_first_item` is still included in the response as a safety
+  net if HarvestAPI changes their schema again.
 
 ### doc_enrich_emails
 - Method: POST
@@ -873,9 +877,11 @@ await fetch(runUrl, {
 - Expose the credential in any response body or log
 - Let `maxPosts`/`postedLimit` be set from client input — they're hardcoded server-side on purpose to
   bound cost per search
-- Assume the exact output field names without checking a real run first — the actor's public docs only
-  showed the input schema when this was built, not the output shape; `doc_search_keyword_leads` parses
-  defensively and logs `_debug_first_item` for this reason
+- Assume output field names without checking HarvestAPI's documented sample first — `postedAt` is a
+  nested object (`postedAt.date` for the ISO string), and the author's headline is `author.info`, not
+  `position`/`headline`. Getting this wrong the first time silently broke both the displayed date and the
+  healthcare-relevance filter (see doc_search_keyword_leads' notes below) — `_debug_first_item` is logged
+  in the response as a safety net if the schema ever changes again.
 
 ### Apify (HarvestAPI linkedin-profile-scraper actor — email enrichment)
 - Research source: https://apify.com/harvestapi/linkedin-profile-scraper/api/openapi
