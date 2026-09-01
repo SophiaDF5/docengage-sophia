@@ -115,7 +115,28 @@ Notes:
   asynchronously — not built yet. If you want that, it's a real scope addition (new endpoint +
   async job correlation), not a quick tweak.
 
-## 5. Configure Supabase Secrets
+## 5. Brevo API Key (registration verification emails)
+
+Powers the public registration flow — Register → 6-digit code emailed → Verify (`doc_register`,
+`doc_resend_code`). Chosen because its free plan sends to any recipient with only a single verified
+sender **email address**, no domain purchase or DNS setup required (Resend needs a verified domain;
+SendGrid's free tier is now a time-limited trial).
+
+1. Sign up free at [brevo.com](https://www.brevo.com) — no credit card required
+2. Go to **Senders, Domains & Dedicated IPs → Senders** and add the email address you want
+   verification codes to come from. Brevo emails you a confirmation link — click it to verify.
+3. Go to **SMTP & API → API Keys** and generate a new API key
+4. Set two secrets (see step 6 below): `BREVO_API_KEY` (the key) and `BREVO_SENDER_EMAIL` (the
+   exact address you verified in step 2 — sending from an unverified address will fail)
+
+Notes:
+- Free plan: 300 emails/day, 9,000/month, no expiry, no credit card ever required for this volume.
+- If you outgrow the free plan or want emails to come from your own domain later, you can add and
+  verify a full domain in Brevo instead of a single sender — no code changes needed, just update
+  `BREVO_SENDER_EMAIL` to an address on that domain.
+- Auth header is `api-key`, **not** `Authorization: Bearer` — a common mistake with this API.
+
+## 6. Configure Supabase Secrets
 
 ### Local development
 
@@ -126,6 +147,8 @@ supabase secrets set MAKE_WEBHOOK_ID="<path-from-make-webhook-url>"
 supabase secrets set OPENAI_API_KEY="<your-openai-key>"
 supabase secrets set APIFY_API_KEY="<your-apify-token>"
 supabase secrets set APOLLO_API_KEY="<your-apollo-key>"
+supabase secrets set BREVO_API_KEY="<your-brevo-key>"
+supabase secrets set BREVO_SENDER_EMAIL="<your-verified-sender-email>"
 ```
 
 ### Hosted (production/staging)
@@ -140,6 +163,8 @@ supabase secrets set MAKE_WEBHOOK_ID="<path-from-make-webhook-url>"
 supabase secrets set OPENAI_API_KEY="<your-openai-key>"
 supabase secrets set APIFY_API_KEY="<your-apify-token>"
 supabase secrets set APOLLO_API_KEY="<your-apollo-key>"
+supabase secrets set BREVO_API_KEY="<your-brevo-key>"
+supabase secrets set BREVO_SENDER_EMAIL="<your-verified-sender-email>"
 ```
 
 ### Verify secrets are set
@@ -148,10 +173,10 @@ supabase secrets set APOLLO_API_KEY="<your-apollo-key>"
 supabase secrets list
 ```
 
-You should see `MAKE_WEBHOOK_SECRET`, `MAKE_WEBHOOK_ID`, `OPENAI_API_KEY`, `APIFY_API_KEY`, and
-`APOLLO_API_KEY` listed.
+You should see `MAKE_WEBHOOK_SECRET`, `MAKE_WEBHOOK_ID`, `OPENAI_API_KEY`, `APIFY_API_KEY`,
+`APOLLO_API_KEY`, `BREVO_API_KEY`, and `BREVO_SENDER_EMAIL` listed.
 
-## 6. Verify End-to-End
+## 7. Verify End-to-End
 
 ### Test inbound webhook
 
@@ -190,7 +215,7 @@ curl -X POST "${SUPABASE_URL}/functions/v1/doc_approve_comment" \
 
 Expected: `200` with `{ "data": { "id": "...", "status": "approved", "posted": true } }`
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
@@ -204,3 +229,6 @@ Expected: `200` with `{ "data": { "id": "...", "status": "approved", "posted": t
 | Scrape times out after ~2 minutes | Post has too many comments for the 120s poll budget | Retry — large posts may need a second attempt; consider raising `maxWaitMs` in `doc_scrape_post_commenters/index.ts` if this recurs often |
 | `500` with "Apollo API key not configured" | Secret not set | Run `supabase secrets set APOLLO_API_KEY=...` |
 | "Try Apollo" always reports 0 found | Could be genuinely no matches, or the response field-name guess in `extractEmail()` is wrong | Check edge function logs (`supabase functions logs doc_enrich_emails_apollo`) for `_debug_first_result` and confirm the real field name matches what the code checks |
+| Registration succeeds but no code ever arrives | `BREVO_API_KEY`/`BREVO_SENDER_EMAIL` not set, or the sender email isn't verified in Brevo yet | Check `supabase functions logs doc_register` for a Brevo error; verify the sender in Brevo's dashboard and confirm both secrets are set |
+| Verify page says "no pending verification for this email" | The 15-minute code expired and nobody clicked Resend, or `doc_verify_email` already consumed it (codes are one-time use) | Click "Resend Code" to get a fresh one |
+| Login says "Email not confirmed" instead of redirecting to Verify | Frontend build predates this feature, or GoTrue's error text changed | Confirm the deployed frontend includes this update; check the exact error string still contains "email not confirmed" (case-insensitive match in `Login.tsx`) |

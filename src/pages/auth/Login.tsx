@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -7,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 
 export function Login() {
   const { signIn } = useAuth();
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +21,16 @@ export function Login() {
     try {
       await signIn(email, password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign in failed");
+      const message = err instanceof Error ? err.message : "Sign in failed";
+      // GoTrue's error text for an unconfirmed account — send them to finish
+      // verifying instead of just showing a dead-end error. We still have
+      // the password they just typed, so Verify can sign them in right
+      // after confirming, without asking again.
+      if (message.toLowerCase().includes("email not confirmed")) {
+        navigate("/verify", { state: { email, password } });
+        return;
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -65,6 +76,12 @@ export function Login() {
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Signing in..." : "Sign In"}
             </Button>
+            <p className="text-sm text-center text-muted-foreground">
+              Don't have an account?{" "}
+              <Link to="/register" className="underline hover:text-foreground">
+                Register
+              </Link>
+            </p>
           </form>
         </CardContent>
       </Card>

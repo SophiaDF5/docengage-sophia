@@ -79,11 +79,15 @@ it means a future access-model change (if one is ever needed again) stays just a
 
 1. NEVER use the service_role key in application code. It exists only in
    test scripts and isolated admin functions with no user JWT to key RLS off
-   of — currently `doc_daily_followups` (cron) and `doc_inbound_post`
+   of — currently `doc_daily_followups` (cron), `doc_inbound_post`
    (Make.com webhook, authenticated via MAKE_WEBHOOK_SECRET instead of a
-   session). Any new function added to this list must have the same property:
-   a trusted, non-interactive caller with no user session, not just "it was
-   convenient."
+   session), and `doc_register` / `doc_verify_email` / `doc_resend_code`
+   (public registration — by definition there is no account, and therefore
+   no user JWT, until doc_register creates one; confirming it requires the
+   admin API's `updateUserById`, which requires service_role). Any new
+   function added to this list must have the same property: a trusted (or,
+   for the registration trio, tightly-scoped-to-only-the-caller's-own-new-account)
+   caller with no user session, not just "it was convenient."
 
 2. NEVER accept user_id from request bodies, query parameters, headers,
    or any client-provided source. User identity is ALWAYS derived from the
@@ -189,6 +193,7 @@ it means a future access-model change (if one is ever needed again) stays just a
 - supabase/migrations/014_add_tag_to_dm_leads.sql → Adds `tag` text column to doc_dm_leads, mirroring doc_contacts.tag — general freeform label support for Engaged leads (e.g. "YouTube"). Not used for "Invited" — see migration 015.
 - supabase/migrations/015_add_invited_status.sql → Adds `'invited'` as a fourth allowed value (pending → invited → messaged → engaged) to the status CHECK constraint on both doc_contacts and doc_dm_leads. Replaces an earlier tag-based "Invited" approach — it's now a status you pick from the same Status dropdown as Pending/Messaged/Engaged, and filterable the same way in Outreach's Status row.
 - supabase/migrations/016_add_keyword_search.sql → Adds `'keyword_search'` as a third allowed value on doc_contacts.source (alongside 'scraped'/'manual'), plus `matched_keyword`, `source_post_url`, `source_post_excerpt`, `source_post_date` columns — supports the Keyword Search page/feature (see doc_search_keyword_leads).
+- supabase/migrations/017_add_email_verifications.sql → Creates `doc_email_verifications`, an infra table (like doc_rate_limits) with no org_id and no RLS policies — only ever touched by the service_role client inside doc_register/doc_verify_email/doc_resend_code. Supports public registration with emailed 6-digit codes.
 
 ### Deployment
 - docs/deployment/MANUAL_SQL_OPERATIONS.md  → Manual SQL that must be run
@@ -205,11 +210,18 @@ it means a future access-model change (if one is ever needed again) stays just a
 - supabase/functions/doc_enrich_emails_apollo/index.ts → Second-attempt email finder via Apollo.io People Enrichment API — deliberately separate button/cap (max 20) from doc_enrich_emails since Apollo credits are much scarcer
 - supabase/functions/doc_generate_comment/index.ts → Drafts the AI comment for a post (used by doc_inbound_post and manual regeneration from the Comments dashboard); reads doc_organizations.ai_system_prompt for tone
 - supabase/functions/doc_generate_dm/index.ts → Drafts DM replies/openers for DM Assistant and Outreach's personalized mode; reads doc_organizations.ai_system_prompt for tone
+- supabase/functions/doc_register/index.ts → Public sign-up: creates an unconfirmed auth user (admin API), generates a 6-digit code, stores it in doc_email_verifications, emails it via Brevo. No requireAuth() — see Rule 1's exception list.
+- supabase/functions/doc_verify_email/index.ts → Confirms a doc_register code: checks it against doc_email_verifications (expiry + 5-attempt cap), flips `email_confirm` to true via the admin API on success, deletes the row (one-time use). No requireAuth().
+- supabase/functions/doc_resend_code/index.ts → Regenerates and re-sends the code for an existing unconfirmed registration, 60s cooldown per email, generic response either way so it can't be used to probe which emails are registered. No requireAuth().
+- supabase/functions/_shared/brevo.ts → Shared Brevo transactional-email helper (`sendEmail()`), used only by doc_register/doc_resend_code. Returns true/false rather than throwing — same "don't conflate two outcomes" pattern as the file-processing rule (Rule 19).
 
 ### Frontend
 - src/pages/CommentGenerator.tsx → "Comments" page (route `/`). Drafts a LinkedIn comment from a pasted caption or an uploaded screenshot, plus a history of recent comments. If you fill in Author Name + LinkedIn URL, that person is saved into `doc_dm_leads` (Engaged Leads) with `status = 'engaged'` on generation (commenting on their post counts as engaging with them) — skipped if a lead with that LinkedIn URL already exists.
 - src/pages/Contacts.tsx      → "Scraped Leads" page. CRM pipeline of doctors identified via the scraper only (`source = 'scraped'`). Manually added leads live on the Manual Added Leads page instead, though both read/write the same doc_contacts table and `["contacts", orgId]` query key. Select leads without an email (max 50) to run doc_enrich_emails, or (max 20) to run doc_enrich_emails_apollo as a second attempt; export filtered view to CSV
 - src/pages/ManualLeads.tsx   → "Manual Added Leads" page. Shows doc_contacts rows where `source = 'manual'` — added one-by-one via AddContactDialog, or via CSV/Excel upload (`UploadLeadsDialog`, defined in this file). Both let you set a freeform `tag` (e.g. "YouTube") on the lead(s); the page's filter chips are built dynamically from whatever distinct `tag` values currently exist — no fixed list. Supports status changes, delete, and the same email-enrichment (Find Emails) flow as Scraped Leads. Shares the `["contacts", orgId]` query key so status stays in sync with Scraped Leads and Outreach.
+- src/pages/auth/Register.tsx → Public "Create your account" page (name/email/password/confirm). Calls doc_register, then routes to /verify carrying `{ email, password }` via router state (never persisted) so Verify can auto-sign-in once the code is confirmed.
+- src/pages/auth/VerifyCode.tsx → "Check your email" page. Enter the 6-digit code → calls doc_verify_email → if we still have the password from Register's route state, signs the user in immediately and lands them in the app; otherwise sends them to /login. Includes a 60s-cooldown "Resend Code" button (doc_resend_code). Falls back to an editable email field if opened without route state (e.g. a page refresh lost it).
+- src/pages/auth/Login.tsx → Unchanged sign-in form, plus a "Register" link, plus: if `signInWithPassword` fails with "email not confirmed," redirects to /verify with the email+password the user just typed instead of showing a dead-end error.
 - src/pages/KeywordSearch.tsx → "Keyword Search" page. Type a topic (e.g. "AI and healthcare") → calls doc_search_keyword_leads → shows a preview list (name, headline, their post + link, posted date) with checkboxes, nothing saved yet. Selecting leads and clicking "Save Selected as Leads" upserts them into doc_contacts with `source = 'keyword_search'`, `matched_keyword`, and the post context (`source_post_url`/`source_post_excerpt`/`source_post_date`) — see migration 016. Below the search box, a second table shows everything already saved this way (own the `source = 'keyword_search'` rows, mirroring how Scraped Leads owns `'scraped'` and Manual Added Leads owns `'manual'`), with the same Status dropdown/CustomFieldsDialog/EditContactDialog/delete-with-confirm pattern as those pages, sharing `["contacts", orgId]` for the same cross-page sync.
 - src/pages/Settings.tsx      → Account settings (name, AI tone/system prompt), tone sample uploads. No team/member management — see "Account model" above.
 - src/pages/DmAssistant.tsx   → AI-drafted DM replies/openers for one conversation at a time, backed by doc_dm_drafts history
@@ -243,6 +255,27 @@ it means a future access-model change (if one is ever needed again) stays just a
 | key | text | not null |
 | user_id | uuid | FK → auth.users, not null |
 | created_at | timestamptz | not null, default now() |
+
+### doc_email_verifications
+Infra table (same family as doc_rate_limits) supporting public registration — pre-account, so
+there's no org_id, and it's only ever touched by the service_role client inside
+doc_register/doc_verify_email/doc_resend_code, never by an authenticated user's client.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | uuid | PK, default gen_random_uuid() |
+| user_id | uuid | FK → auth.users, not null, unique — one active code per account |
+| email | text | not null |
+| code | text | not null — 6-digit numeric, generated via crypto.getRandomValues |
+| attempts | int | not null, default 0 — capped at 5 by doc_verify_email |
+| expires_at | timestamptz | not null — 15 minutes from generation |
+| created_at | timestamptz | not null, default now() |
+| updated_at | timestamptz | not null, default now(), auto-trigger — doubles as "last code sent at" for doc_resend_code's 60s cooldown |
+
+RLS: enabled, but with NO policies for anon/authenticated (default-deny) — mirrors doc_rate_limits'
+documented CI exemption from the standard 4-policy check. Only service_role (which bypasses RLS)
+reads/writes this table.
+Indexes: doc_email_verifications_email_idx
 
 ### doc_organizations
 One row per user — an internal per-account settings container, not a user-facing
@@ -667,6 +700,75 @@ new query key for the same underlying table.
   only ever drafts text — nothing is sent to LinkedIn from here or anywhere else in the app; see
   doc_outreach_messages and the Out of Scope section.
 
+### doc_register
+- Method: POST
+- Rate limit tier: none — see "Known limitation" note below
+- Auth: none (public, pre-account) — does NOT call requireAuth()
+- Input schema:
+  ```typescript
+  z.object({
+    email: z.string().trim().toLowerCase().email().max(255),
+    password: z.string().min(8).max(72),
+    name: z.string().trim().min(1).max(200).optional(),
+  })
+  ```
+- Success response (200):
+  ```json
+  { "data": { "email": "string", "email_sent": boolean } }
+  ```
+- Error responses:
+  - 400: Invalid input, or an account with this email already exists
+  - 500: Sanitized message
+- Tables touched: doc_organizations (WRITE, only if `name` given), doc_email_verifications (WRITE)
+- External calls: Brevo — see Section 6.5
+- Notes: Creates the auth user via `admin.createUser({ email_confirm: false })` — this does NOT
+  trigger Supabase's own confirmation email (only the public `auth.signUp()` client call does that),
+  so nothing is emailed until this function sends its own code via Brevo. `email_sent: false` in the
+  response means the account WAS created but the email leg failed (see Rule 19 — these are separate
+  outcomes) — the frontend tells the user to use "Resend Code." Known limitation: no IP-based
+  throttling (the shared `rateLimit()` helper keys off an existing `auth.users.id`, which doesn't
+  exist yet here) — if spam signups become a problem, add a CAPTCHA or an IP-keyed table rather than
+  silently living with it.
+
+### doc_verify_email
+- Method: POST
+- Rate limit tier: none (see doc_register's note — same limitation applies)
+- Auth: none (public, pre-account) — does NOT call requireAuth()
+- Input schema:
+  ```typescript
+  z.object({
+    email: z.string().trim().toLowerCase().email(),
+    code: z.string().trim().length(6),
+  })
+  ```
+- Success response (200): `{ "data": { "verified": true } }`
+- Error responses:
+  - 400: No pending verification / code expired / incorrect code
+  - 429: Too many incorrect attempts (capped at 5)
+  - 500: Sanitized message
+- Tables touched: doc_email_verifications (READ/WRITE/DELETE)
+- Notes: On a correct code, flips `email_confirm` to true via `admin.updateUserById` and deletes the
+  verification row (one-time use — replaying the same code afterward returns "no pending
+  verification"). The frontend signs the user in immediately afterward with
+  `signInWithPassword()`, using the password it already has in route state from Register.
+
+### doc_resend_code
+- Method: POST
+- Rate limit tier: none — enforces its own 60s-per-email cooldown instead (see Notes)
+- Auth: none (public, pre-account) — does NOT call requireAuth()
+- Input schema: `z.object({ email: z.string().trim().toLowerCase().email() })`
+- Success response (200): `{ "data": { "message": "string" } }` — same message whether or not the
+  email actually has a pending registration
+- Error responses:
+  - 429: Cooldown not elapsed yet
+  - 500: Sanitized message
+- Tables touched: doc_email_verifications (READ/WRITE)
+- External calls: Brevo — see Section 6.5
+- Notes: Deliberately returns the identical generic response for both "email has a pending
+  registration" and "no such pending registration," so this endpoint can't be used to enumerate
+  which emails have registered. The 60-second cooldown is keyed off `updated_at` (refreshed every
+  time a new code is generated) and exists specifically so this can't be used to spam someone's inbox.
+
 ## External Integrations
 
 ### Make.com (Integromat)
@@ -843,6 +945,44 @@ const response = await fetch("https://api.apollo.io/api/v1/people/match", {
   path.
 - Assume Apollo will find an email for every profile — same caveat as the Apify-based tool
 
+### Brevo (transactional email — registration codes)
+- Research source: https://developers.brevo.com/reference/sendtransacemail
+- Base URL: `https://api.brevo.com/v3/`
+- Auth method: API key in the `api-key` header (NOT `Authorization: Bearer`)
+- Secret names: `BREVO_API_KEY`, `BREVO_SENDER_EMAIL` (stored in Supabase Vault)
+- Called from edge function(s): `doc_register`, `doc_resend_code`
+- Trigger: User action (registering, or clicking "Resend Code")
+- Rate limit: Brevo free plan — 300 emails/day, no expiry, no credit card required
+- Why Brevo and not Resend/SendGrid: Resend requires verifying a domain you own before it will send
+  to arbitrary recipients (its `onboarding@resend.dev` sender only delivers to the account owner's
+  own address). SendGrid's free tier is now a time-limited trial, not permanent. Brevo's free plan
+  sends to any recipient with only a single verified sender **email address** (no domain purchase or
+  DNS needed) — the fit for a "$0, no domain" constraint.
+
+**Outbound request shape:**
+```typescript
+const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+  method: "POST",
+  headers: {
+    "api-key": Deno.env.get("BREVO_API_KEY")!,
+    "Content-Type": "application/json",
+    accept: "application/json",
+  },
+  body: JSON.stringify({
+    sender: { email: Deno.env.get("BREVO_SENDER_EMAIL")!, name: "DocEngage" },
+    to: [{ email: recipientEmail }],
+    subject: "Your DocEngage verification code",
+    htmlContent: "<p>Your code is: 123456</p>",
+  }),
+});
+```
+
+**Never:**
+- Call this API from the frontend
+- Expose the credential in any response body or log
+- Assume delivery succeeded without checking `response.ok` — treat email send failure as a separate
+  outcome from whatever database write already happened (Rule 19)
+
 ### OpenAI
 - Research source: https://platform.openai.com/docs/api-reference/chat
 - Base URL: `https://api.openai.com/v1/`
@@ -906,6 +1046,8 @@ if (response.status >= 500) {
 | OPENAI_API_KEY | OpenAI API authentication | PRD Section 4 |
 | APIFY_API_KEY | Apify API authentication (lead scraper) | scripts/setup-integrations.md |
 | APOLLO_API_KEY | Apollo.io API authentication (second-attempt email finder) | scripts/setup-integrations.md |
+| BREVO_API_KEY | Brevo API authentication (registration verification emails) | scripts/setup-integrations.md |
+| BREVO_SENDER_EMAIL | The email address verified as a sender in your Brevo account | scripts/setup-integrations.md |
 
 ### NEVER expose in frontend or edge function responses:
 | Variable | Why |
@@ -918,9 +1060,17 @@ if (response.status >= 500) {
 
 ## Auth Settings
 
-- Signup: Disabled after first account creation (members invited via admin.auth API).
+- Signup: Public self-service registration is live (Register → emailed 6-digit code → Verify →
+  auto sign-in), built via doc_register/doc_verify_email/doc_resend_code — see those functions'
+  docs below. This goes through the **admin API** (`auth.admin.createUser`), which always works
+  regardless of the dashboard's "Allow new signups" toggle — that toggle only gates the public
+  `auth.signUp()` client call, which this app doesn't use for registration. So the toggle can stay
+  in whatever state it was in; it's simply no longer the thing gating who can create an account.
 - Providers: Email/password
-- Email confirmation: Required in production, optional in dev
+- Email confirmation: **Must be ON** ("Confirm email" under Authentication → Providers → Email) —
+  this is what actually blocks an unconfirmed account from signing in until doc_verify_email flips
+  `email_confirm` to true. If this is OFF, newly registered accounts could sign in immediately
+  without ever entering their code, defeating the whole verification step.
 - JWT expiry: 1 hour
 - Allowed redirect URLs:
   - http://localhost:5173 (development)

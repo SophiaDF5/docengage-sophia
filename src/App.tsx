@@ -7,6 +7,8 @@ import { supabaseConfigError } from "./lib/supabaseClient";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppLayout } from "./components/layout/AppLayout";
 import { Login } from "./pages/auth/Login";
+import { Register } from "./pages/auth/Register";
+import { VerifyCode } from "./pages/auth/VerifyCode";
 import { CommentGenerator } from "./pages/CommentGenerator";
 import { DmAssistant } from "./pages/DmAssistant";
 import { Leads } from "./pages/Leads";
@@ -50,6 +52,14 @@ function AppRoutes() {
       <Route
         path="/login"
         element={user ? <Navigate to="/" replace /> : <Login />}
+      />
+      <Route
+        path="/register"
+        element={user ? <Navigate to="/" replace /> : <Register />}
+      />
+      <Route
+        path="/verify"
+        element={user ? <Navigate to="/" replace /> : <VerifyCode />}
       />
       <Route
         element={

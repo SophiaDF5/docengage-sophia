@@ -3,19 +3,25 @@
 SQL operations that must be run manually in the Supabase SQL Editor per environment
 before deploying. Check each item after running it.
 
-## Right now (pending as of 2026-08-31, updated)
+## Right now (pending as of 2026-09-01, updated)
 
-Migrations 010–015 should already be applied (tags, custom fields, account isolation, and the
-Invited status have all been live since before this update). One new migration is pending for the
-new Keyword Search feature:
+Migrations 010–016 should already be applied (tags, custom fields, account isolation, Invited
+status, and Keyword Search). Two more things are pending, for the new public registration feature:
 
-- [ ] **Migration 016** — adds `'keyword_search'` as a third value on `doc_contacts.source`, plus
-  `matched_keyword`/`source_post_url`/`source_post_excerpt`/`source_post_date` columns. Without
-  this, saving a lead from the new Keyword Search page will fail with a database constraint error.
-  See its section below.
-- [ ] Deploy the new edge function: `doc_search_keyword_leads` (see "Deploy edge functions" below).
-- [ ] Redeploy the frontend (`dist` folder) to Netlify after both of the above — the new "Keyword
-  Search" nav item and page won't work without the migration + function in place first.
+- [ ] **Migration 017** — creates `doc_email_verifications` (stores the 6-digit codes emailed
+  during registration). Without this, `doc_register` will fail with a database error the moment
+  someone tries to sign up. See its section below.
+- [ ] **Before anything else in this feature works at all**, sign up for Brevo (free) and set two
+  new secrets — `BREVO_API_KEY` and `BREVO_SENDER_EMAIL`. Full steps in `scripts/setup-integrations.md`
+  section 5. Without these, accounts get created but the verification email never sends.
+- [ ] **Double-check "Confirm email" is ON** in Supabase → Authentication → Providers → Email. This
+  is what actually blocks someone from logging in before they verify — if it's off, the whole
+  verification step does nothing.
+- [ ] Deploy three new edge functions: `doc_register`, `doc_verify_email`, `doc_resend_code` (see
+  "Deploy edge functions" below).
+- [ ] Redeploy the frontend (`dist` folder) to Netlify after all of the above — the new
+  Register/Verify pages and Login's new "Register" link won't work until the migration, secrets,
+  and functions are all in place first.
 
 <details>
 <summary>Migrations 010–013 (should already be applied — expand only if you're not sure)</summary>
@@ -309,6 +315,45 @@ where table_name = 'doc_contacts'
 The first query should show `'keyword_search'` in the list of allowed values; the second should
 return all four column names.
 
+### Migration 017 — paste this into the SQL Editor, right after 016
+
+```sql
+begin;
+
+create table if not exists public.doc_email_verifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references auth.users(id) on delete cascade,
+  email text not null,
+  code text not null,
+  attempts int not null default 0,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists doc_email_verifications_email_idx
+  on public.doc_email_verifications(email);
+
+alter table public.doc_email_verifications enable row level security;
+revoke all on public.doc_email_verifications from anon, authenticated;
+
+create trigger doc_email_verifications_updated_at
+  before update on public.doc_email_verifications
+  for each row execute function public.doc_handle_updated_at();
+
+commit;
+```
+
+Verify with:
+```sql
+select table_name from information_schema.tables
+where table_name = 'doc_email_verifications';
+
+select rowsecurity from pg_tables
+where tablename = 'doc_email_verifications';
+```
+The first should return one row; the second should show `rowsecurity = true`.
+
 ## Deploy edge functions
 
 Run these from the project root on your own machine (not in this chat — CLI auth tokens should
@@ -320,6 +365,9 @@ npx supabase functions deploy doc_enrich_emails --project-ref ijyhyozksijymweikk
 npx supabase functions deploy doc_enrich_emails_apollo --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_scrape_post_commenters --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_search_keyword_leads --project-ref ijyhyozksijymweikkrm
+npx supabase functions deploy doc_register --project-ref ijyhyozksijymweikkrm
+npx supabase functions deploy doc_verify_email --project-ref ijyhyozksijymweikkrm
+npx supabase functions deploy doc_resend_code --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_inbound_post --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_approve_comment --project-ref ijyhyozksijymweikkrm
 npx supabase functions deploy doc_process_tone --project-ref ijyhyozksijymweikkrm
@@ -342,11 +390,20 @@ directory exists) — skip it, there's nothing to deploy.
 npx supabase secrets list --project-ref ijyhyozksijymweikkrm
 ```
 
-You should see `MAKE_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `APIFY_API_KEY`, and `APOLLO_API_KEY`. If
-`APOLLO_API_KEY` is missing, "Try Apollo" will fail with a sanitized 500 — set it with:
+You should see `MAKE_WEBHOOK_SECRET`, `OPENAI_API_KEY`, `APIFY_API_KEY`, `APOLLO_API_KEY`,
+`BREVO_API_KEY`, and `BREVO_SENDER_EMAIL`. If `APOLLO_API_KEY` is missing, "Try Apollo" will fail
+with a sanitized 500 — set it with:
 
 ```bash
 npx supabase secrets set APOLLO_API_KEY="<your-apollo-key>" --project-ref ijyhyozksijymweikkrm
+```
+
+If `BREVO_API_KEY` / `BREVO_SENDER_EMAIL` are missing, registrations will create accounts but never
+send the verification code — set them with:
+
+```bash
+npx supabase secrets set BREVO_API_KEY="<your-brevo-key>" --project-ref ijyhyozksijymweikkrm
+npx supabase secrets set BREVO_SENDER_EMAIL="<your-verified-sender-email>" --project-ref ijyhyozksijymweikkrm
 ```
 
 ## Deploy the frontend (Netlify, manual drag-and-drop)
@@ -381,6 +438,13 @@ without them, the build produces a broken bundle (this was one of the causes of 
 - [ ] On the new Keyword Search page, search a broad healthcare-adjacent keyword, confirm results
   appear with a working "View their post" link, select one, save it, and confirm it shows up both
   in the "Saved from Keyword Search" table below and under the "Keyword Search" filter on Outreach.
+- [ ] From the Login page, click "Register," create a throwaway test account, confirm a 6-digit
+  code actually arrives by email within a minute or two, enter it on the Verify page, and confirm
+  you land signed-in in the app with an empty (fresh) account — not your existing data.
+- [ ] Confirm your own existing account still logs in normally and still shows all your existing
+  leads/data (registration is additive — it should not have touched your account at all).
+- [ ] On the test account from above, sign out, then try logging back in with a code you never
+  entered correctly (or before verifying) — confirm it's rejected rather than let in.
 
 ## Production (original checklist — already applied)
 
