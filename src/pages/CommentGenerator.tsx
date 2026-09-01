@@ -25,12 +25,16 @@ interface GenerateResult {
 }
 
 export function CommentGenerator() {
-  const { currentOrgId } = useOrganization();
+  const { currentOrgId, isLoading: isOrgLoading } = useOrganization();
+
+  if (isOrgLoading) {
+    return <p className="text-sm text-muted-foreground">Loading...</p>;
+  }
 
   if (!currentOrgId) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No organization selected.
+        No account found.
       </div>
     );
   }

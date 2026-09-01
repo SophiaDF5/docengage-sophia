@@ -20,7 +20,7 @@ interface GenerateDmResult {
 }
 
 export function DmAssistant() {
-  const { currentOrgId } = useOrganization();
+  const { currentOrgId, isLoading: isOrgLoading } = useOrganization();
   const queryClient = useQueryClient();
 
   const [myLastReply, setMyLastReply] = useState("");
@@ -58,10 +58,14 @@ export function DmAssistant() {
     toast.success("Copied to clipboard");
   };
 
+  if (isOrgLoading) {
+    return <p className="text-sm text-muted-foreground">Loading...</p>;
+  }
+
   if (!currentOrgId) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No organization selected.
+        No account found.
       </div>
     );
   }

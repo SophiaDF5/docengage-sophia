@@ -40,8 +40,9 @@ export function AppLayout() {
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex h-14 items-center px-4 sm:px-6">
-          <Link to="/" className="mr-4 sm:mr-6 font-semibold text-lg shrink-0">
-            DocEngage
+          <Link to="/" className="mr-4 sm:mr-6 flex items-center gap-2 font-semibold text-lg shrink-0">
+            <img src="/favicon.svg" alt="" className="h-6 w-6 rounded-md" />
+            <span className="hidden sm:inline">DocEngage</span>
           </Link>
 
           {/* Desktop nav — hidden below md, where it wouldn't fit (7 items

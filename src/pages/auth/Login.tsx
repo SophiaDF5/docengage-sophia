@@ -40,6 +40,7 @@ export function Login() {
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
+          <img src="/favicon.svg" alt="DocEngage" className="h-12 w-12 mx-auto mb-2 rounded-xl" />
           <CardTitle className="text-2xl">DocEngage</CardTitle>
           <p className="text-sm text-muted-foreground">
             Sign in to your account

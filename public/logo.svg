@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 64" width="260" height="64">
+  <defs>
+    <linearGradient id="bgGrad2" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#0891B2"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bgGrad2)"/>
+  <rect x="13" y="16" width="38" height="27" rx="9" fill="#FFFFFF"/>
+  <path d="M21 43 L15 52 L30 43 Z" fill="#FFFFFF"/>
+  <path d="M18 30 L24 30 L27 21 L32 39 L35 25 L37 30 L46 30" fill="none" stroke="#2563EB" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="78" y="41" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="27" font-weight="700" fill="#0F172A">Doc<tspan fill="#2563EB">Engage</tspan></text>
+</svg>
