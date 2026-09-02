@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, Fragment } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "../lib/supabaseClient";
@@ -18,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "../components/ui/table";
-import { Upload, Loader2 } from "lucide-react";
+import { Upload, Loader2, Copy, Check } from "lucide-react";
 import type { ToneSample } from "../types/database";
 
 export function Settings() {
@@ -119,6 +119,18 @@ function ToneSection({
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [expandedSampleId, setExpandedSampleId] = useState<string | null>(null);
+  const [copiedSampleId, setCopiedSampleId] = useState<string | null>(null);
+
+  const copyTranscript = async (sampleId: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedSampleId(sampleId);
+      setTimeout(() => setCopiedSampleId((current) => (current === sampleId ? null : current)), 2000);
+    } catch {
+      toast.error("Couldn't copy — select and copy the text manually");
+    }
+  };
 
   const samplesQuery = useQuery({
     queryKey: ["tone_samples", orgId],
@@ -250,31 +262,73 @@ function ToneSection({
             </TableHeader>
             <TableBody>
               {samplesQuery.data.map((sample) => (
-                <TableRow key={sample.id}>
-                  <TableCell className="font-mono text-sm">
-                    {sample.file_path.split("/").pop()}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={processingStatusBadge[sample.processing_status]}>
-                      {sample.processing_status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {new Date(sample.created_at).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell>
-                    {sample.processing_status === "failed" && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => processMutation.mutate(sample.id)}
-                        disabled={processMutation.isPending}
-                      >
-                        Retry
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
+                <Fragment key={sample.id}>
+                  <TableRow>
+                    <TableCell className="font-mono text-sm">
+                      {sample.file_path.split("/").pop()}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={processingStatusBadge[sample.processing_status]}>
+                        {sample.processing_status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {new Date(sample.created_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell>
+                      {sample.processing_status === "failed" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => processMutation.mutate(sample.id)}
+                          disabled={processMutation.isPending}
+                        >
+                          Retry
+                        </Button>
+                      )}
+                      {sample.processing_status === "completed" && sample.extracted_text && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setExpandedSampleId((current) => (current === sample.id ? null : sample.id))
+                          }
+                        >
+                          {expandedSampleId === sample.id ? "Hide" : "View"} Transcript
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                  {expandedSampleId === sample.id && sample.extracted_text && (
+                    <TableRow>
+                      <TableCell colSpan={4} className="bg-muted/50">
+                        <div className="space-y-2 py-1">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium text-muted-foreground">
+                              Raw transcript (this is what Whisper transcribed word-for-word)
+                            </p>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => copyTranscript(sample.id, sample.extracted_text!)}
+                            >
+                              {copiedSampleId === sample.id ? (
+                                <>
+                                  <Check className="h-3.5 w-3.5 mr-1" /> Copied
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3.5 w-3.5 mr-1" /> Copy
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                          <p className="text-sm whitespace-pre-wrap">{sample.extracted_text}</p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
               ))}
             </TableBody>
           </Table>
