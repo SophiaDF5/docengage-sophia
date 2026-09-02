@@ -104,7 +104,18 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const systemPrompt = (org.ai_system_prompt || DEFAULT_SYSTEM_PROMPT) + HUMAN_STYLE_GUIDE + PERSPECTIVE_OVERRIDE;
+    // Reina confirmed the "as a business owner" framing persisted even with
+    // PERSPECTIVE_OVERRIDE appended last — meaning it's baked into her custom
+    // ai_system_prompt (the GPT-4o-generated summary of her tone sample, see
+    // doc_process_tone) strongly enough that a trailing "don't do this"
+    // instruction couldn't fully suppress it. She then asked to specifically
+    // "imitate the voice of atba" — so Comment Generator now always uses the
+    // hand-written DEFAULT_SYSTEM_PROMPT persona above (which IS Atiba, by
+    // name, with the business-owner framing already stripped out) instead of
+    // her tone-sample-derived prompt. This intentionally diverges from
+    // doc_generate_dm, which still uses org.ai_system_prompt — only Comments
+    // had the recurring unwanted framing.
+    const systemPrompt = DEFAULT_SYSTEM_PROMPT + HUMAN_STYLE_GUIDE + PERSPECTIVE_OVERRIDE;
 
     // 4. Generate comment based on mode
     let generatedContent: string | null = null;
