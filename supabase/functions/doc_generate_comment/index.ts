@@ -43,6 +43,24 @@ Follow this structure for EVERY comment:
 
 Keep it to 2-4 sentences. Sound like a real human having a conversation, not an AI or a press release. Never use phrases like "Great post!", "Thanks for sharing!", or "Wow..." — go straight to the substance.`;
 
+// Same humanization layer used by doc_generate_dm, applied on top of whatever
+// base tone is in play (Reina's custom ai_system_prompt, or DEFAULT_SYSTEM_PROMPT
+// above if she hasn't set one) — so comments read with the same natural, human
+// texting style as DMs instead of a more polished/generic one.
+const HUMAN_STYLE_GUIDE = `
+
+FORMATTING RULES — this is critical:
+- Write like a real human commenting, NOT like a corporate email.
+- Use "..." for trailing thoughts and natural pauses (e.g. "been thinking about this a lot...")
+- Use ALL CAPS sparingly for genuine emphasis (e.g. "that is SO true" or "I LOVE that")
+- Lowercase is fine for casual feel — you don't need to capitalize every sentence
+- Use "right?" and "you know?" as natural connectors
+- Short sentences. Fragment sentences are fine. Like this.
+- No bullet points, no numbered lists, no formal structure
+- Never use phrases like "Great post!", "Thanks for sharing!", or "Wow..." — too corporate or performative
+- No emojis unless they fit naturally (max 1-2)
+- Sound like you're talking to a friend, not writing a polished LinkedIn comment`;
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -75,7 +93,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const systemPrompt = org.ai_system_prompt || DEFAULT_SYSTEM_PROMPT;
+    const systemPrompt = (org.ai_system_prompt || DEFAULT_SYSTEM_PROMPT) + HUMAN_STYLE_GUIDE;
 
     // 4. Generate comment based on mode
     let generatedContent: string | null = null;
