@@ -4,6 +4,7 @@ import { rateLimit } from "../_shared/rate-limit.ts";
 import { safeError } from "../_shared/error-handler.ts";
 import { validateBody, z } from "../_shared/validate.ts";
 import { callOpenAI, callOpenAIVision } from "../_shared/openai.ts";
+import { ATIBA_PERSONA, ATIBA_HUMAN_STYLE_GUIDE, ATIBA_PERSPECTIVE_OVERRIDE } from "../_shared/atiba-persona.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const GenerateCommentSchema = z.object({
@@ -24,17 +25,16 @@ const GenerateCommentSchema = z.object({
   { message: "Missing required fields for the selected mode" }
 );
 
-const DEFAULT_SYSTEM_PROMPT = `You are Atiba de Souza, a CEO (NOT a doctor or medical professional) who engages on LinkedIn with a warm, conversational, and genuinely curious tone.
-
-Your style is:
-- Vulnerable and real — you share from personal experience, not theory
-- Conversational — you write like you talk, using "right?" as a natural connector
-- Reflective — you go deeper than surface-level, but keep it concise
-- Curious — you genuinely want to hear the other person's perspective
-- Casual language — "heck", "I'm curious", "love that", not corporate jargon
-- Human-like writing — use "..." for natural pauses, CAPITAL LETTERS to emphasize key words, and casual punctuation. Write the way real people type on social media, not like a polished essay.
-
-IMPORTANT: You are NOT a doctor. Never use medical terminology, clinical language, or comment as if you have healthcare expertise. You're commenting as yourself — genuinely curious, not trying to sound like an expert.
+// The base persona (ATIBA_PERSONA), the DM-style formatting rules
+// (ATIBA_HUMAN_STYLE_GUIDE), and the "don't label your perspective" override
+// (ATIBA_PERSPECTIVE_OVERRIDE) all live in ../_shared/atiba-persona.ts and are
+// shared with doc_generate_dm — this is now the app's one permanent, hardcoded
+// voice for every account, not something read from doc_organizations
+// .ai_system_prompt. See that file's header comment for the full history of
+// why (the "as a business owner" framing kept resurfacing from Reina's
+// per-account tone-sample text even with a trailing override, and she then
+// asked for the voice to be locked/permanent across the whole app).
+const COMMENT_STRUCTURE = `
 
 Follow this structure for EVERY comment:
 1. Acknowledge — connect with what the author shared personally or validate it
@@ -42,35 +42,6 @@ Follow this structure for EVERY comment:
 3. Follow-up question — end with a simple, genuine question to keep the conversation going
 
 Keep it to 2-4 sentences. Sound like a real human having a conversation, not an AI or a press release. Never use phrases like "Great post!", "Thanks for sharing!", or "Wow..." — go straight to the substance.`;
-
-// Same humanization layer used by doc_generate_dm, applied on top of whatever
-// base tone is in play (Reina's custom ai_system_prompt, or DEFAULT_SYSTEM_PROMPT
-// above if she hasn't set one) — so comments read with the same natural, human
-// texting style as DMs instead of a more polished/generic one.
-const HUMAN_STYLE_GUIDE = `
-
-FORMATTING RULES — this is critical:
-- Write like a real human commenting, NOT like a corporate email.
-- Use "..." for trailing thoughts and natural pauses (e.g. "been thinking about this a lot...")
-- Use ALL CAPS sparingly for genuine emphasis (e.g. "that is SO true" or "I LOVE that")
-- Lowercase is fine for casual feel — you don't need to capitalize every sentence
-- Use "right?" and "you know?" as natural connectors
-- Short sentences. Fragment sentences are fine. Like this.
-- No bullet points, no numbered lists, no formal structure
-- Never use phrases like "Great post!", "Thanks for sharing!", or "Wow..." — too corporate or performative
-- No emojis unless they fit naturally (max 1-2)
-- Sound like you're talking to a friend, not writing a polished LinkedIn comment`;
-
-// Reina's feedback: comments kept framing insights as "as a business owner" /
-// "as a CEO" and the tone still didn't match doc_generate_dm's. Since her
-// account has a custom ai_system_prompt (built from her uploaded tone sample —
-// see doc_process_tone), that phrasing could be coming from that custom text
-// rather than DEFAULT_SYSTEM_PROMPT above. This override is appended LAST, after
-// the base tone AND the formatting rules, so it takes priority no matter which
-// one the "business owner" framing is actually coming from.
-const PERSPECTIVE_OVERRIDE = `
-
-IMPORTANT — follow this above anything said earlier: Do NOT describe or label your perspective (e.g. "as a business owner," "as a CEO," "from my experience running a company," "speaking as someone who..."). Just say the thought or reaction directly and plainly, the way a person naturally would in conversation — no framing, no announcing where the insight is coming from.`;
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -89,11 +60,12 @@ Deno.serve(async (req: Request) => {
     const [body, validationError] = await validateBody(req, GenerateCommentSchema);
     if (validationError) return validationError;
 
-    // 3. Fetch org settings
+    // 3. Confirm org exists (org_id is still validated even though its
+    // ai_system_prompt column is no longer read — see comment above)
     const supabase = createUserClient(req);
     const { data: org, error: orgError } = await supabase
       .from("doc_organizations")
-      .select("ai_system_prompt")
+      .select("id")
       .eq("id", body.org_id)
       .single();
 
@@ -104,22 +76,11 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Reina confirmed the "as a business owner" framing persisted even with
-    // PERSPECTIVE_OVERRIDE appended last — meaning it's baked into her custom
-    // ai_system_prompt (the GPT-4o-generated summary of her tone sample, see
-    // doc_process_tone) strongly enough that a trailing "don't do this"
-    // instruction couldn't fully suppress it. She then asked to specifically
-    // "imitate the voice of atba" — so Comment Generator now always uses the
-    // hand-written DEFAULT_SYSTEM_PROMPT persona above (which IS Atiba, by
-    // name, with the business-owner framing already stripped out) instead of
-    // her tone-sample-derived prompt. This intentionally diverges from
-    // doc_generate_dm, which still uses org.ai_system_prompt — only Comments
-    // had the recurring unwanted framing.
-    const systemPrompt = DEFAULT_SYSTEM_PROMPT + HUMAN_STYLE_GUIDE + PERSPECTIVE_OVERRIDE;
+    const systemPrompt = ATIBA_PERSONA + COMMENT_STRUCTURE + ATIBA_HUMAN_STYLE_GUIDE + ATIBA_PERSPECTIVE_OVERRIDE;
 
     // 4. Generate comment based on mode
     let generatedContent: string | null = null;
-    let extractedContent = body.content ?? null;
+    const extractedContent = body.content ?? null;
 
     try {
       if (body.mode === "image") {

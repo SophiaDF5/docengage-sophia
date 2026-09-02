@@ -4,6 +4,7 @@ import { rateLimit } from "../_shared/rate-limit.ts";
 import { safeError } from "../_shared/error-handler.ts";
 import { validateBody, z } from "../_shared/validate.ts";
 import { callOpenAI } from "../_shared/openai.ts";
+import { ATIBA_PERSONA, ATIBA_HUMAN_STYLE_GUIDE, ATIBA_PERSPECTIVE_OVERRIDE } from "../_shared/atiba-persona.ts";
 
 const GenerateDmSchema = z.object({
   org_id: z.string().uuid(),
@@ -35,11 +36,16 @@ Deno.serve(async (req: Request) => {
     const [body, validationError] = await validateBody(req, GenerateDmSchema);
     if (validationError) return validationError;
 
-    // 3. Fetch org settings
+    // 3. Confirm org exists (org_id is still validated even though its
+    // ai_system_prompt column is no longer read — DM Generator now always
+    // uses the same permanent, hardcoded Atiba voice as Comment Generator,
+    // shared via ../_shared/atiba-persona.ts. Per-account tone customization
+    // via Settings > Tone & Voice no longer affects DMs either — see that
+    // file's header comment for why.)
     const supabase = createUserClient(req);
     const { data: org, error: orgError } = await supabase
       .from("doc_organizations")
-      .select("ai_system_prompt")
+      .select("id")
       .eq("id", body.org_id)
       .single();
 
@@ -49,23 +55,6 @@ Deno.serve(async (req: Request) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    const basePrompt = org.ai_system_prompt ||
-      "You are a professional CEO. Write warm, professional direct messages that build genuine relationships with healthcare professionals.";
-
-    const humanStyleGuide = `
-
-FORMATTING RULES — this is critical:
-- Write like a real human texting. NOT like a corporate email.
-- Use "..." for trailing thoughts and natural pauses (e.g. "been thinking about this a lot...")
-- Use ALL CAPS sparingly for genuine emphasis (e.g. "that is SO true" or "I LOVE that")
-- Lowercase is fine for casual feel — you don't need to capitalize every sentence
-- Use "right?" and "you know?" as natural connectors
-- Short sentences. Fragment sentences are fine. Like this.
-- No bullet points, no numbered lists, no formal structure
-- Never use phrases like "I'd love to connect", "Let's schedule a call", or "Wow..." — too corporate or performative
-- No emojis unless they fit naturally (max 1-2)
-- Sound like you're talking to a friend, not writing a LinkedIn message`;
 
     let leadContext = "";
     if (body.lead_name || body.lead_bio || body.lead_links) {
@@ -77,7 +66,7 @@ FORMATTING RULES — this is critical:
 
     const isNewConvo = !body.my_last_reply && !body.their_last_reply;
 
-    const systemPrompt = `${basePrompt}${humanStyleGuide}\n\n${
+    const systemPrompt = `${ATIBA_PERSONA}${ATIBA_HUMAN_STYLE_GUIDE}${ATIBA_PERSPECTIVE_OVERRIDE}\n\n${
       isNewConvo
         ? "You are drafting an opening direct message to start a new conversation. Make it feel natural and genuine — not salesy or forced."
         : "You are drafting a direct message reply. Match the tone and energy of the ongoing conversation. Keep your reply concise and natural — avoid sounding scripted."

@@ -207,7 +207,9 @@ function ToneSection({
         <div>
           <h2 className="text-lg font-semibold">Tone & Voice</h2>
           <p className="text-sm text-muted-foreground">
-            Upload audio or text samples to train the AI on your communication style
+            Comments and DMs always write in Atiba's voice, the same for every account —
+            it's built into the app rather than set per account. Upload a sample here only
+            if you want to pull a raw transcript to refine that voice with.
           </p>
         </div>
         <div>
@@ -234,12 +236,14 @@ function ToneSection({
         </div>
       </div>
 
-      {/* Current system prompt */}
+      {/* This summary is generated from an uploaded sample but no longer feeds
+          Comment or DM generation (see the note above) — kept only as a
+          reference in case it's useful. */}
       {systemPrompt && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Current AI System Prompt
+              Tone Summary From Your Last Sample (reference only — not used by Comments or DMs)
             </CardTitle>
           </CardHeader>
           <CardContent>
