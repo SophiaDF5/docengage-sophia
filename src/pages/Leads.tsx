@@ -327,6 +327,18 @@ export function Leads() {
                         {tag}
                       </Badge>
                     )}
+                    {/* created_at for a doc_dm_leads row IS the moment they were
+                        engaged, for the common case of Comment Generator
+                        auto-saving someone here right when you comment on
+                        their post (see CommentGenerator.tsx's saveLeadIfNew).
+                        For a merged-in doc_contacts row it's when that lead
+                        record was created, which may predate when its status
+                        actually became Messaged/Engaged — there's no separate
+                        "became engaged" timestamp tracked, so "Added" is the
+                        honest label either way rather than overclaiming. */}
+                    <p className="text-xs text-muted-foreground">
+                      Added {new Date(lead.created_at).toLocaleDateString()}
+                    </p>
                     {Object.keys(customFields).length > 0 && (
                       <div className="flex flex-wrap gap-1 pt-1">
                         {Object.entries(customFields).map(([key, value]) => (

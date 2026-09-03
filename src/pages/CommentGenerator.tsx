@@ -12,7 +12,7 @@ import { Textarea } from "../components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Badge } from "../components/ui/badge";
 import { Skeleton } from "../components/ui/skeleton";
-import { Copy, RefreshCw, Upload, Loader2, Trash2 } from "lucide-react";
+import { Copy, RefreshCw, Upload, Loader2 } from "lucide-react";
 import type { CommentWithPost } from "../types/database";
 
 interface GenerateResult {
@@ -387,20 +387,13 @@ function ImageMode({ orgId }: { orgId: string }) {
 }
 
 function CommentHistory({ orgId }: { orgId: string }) {
-  const queryClient = useQueryClient();
-
+  // Reina asked for this list to serve as a permanent tracker of every
+  // comment ever generated — it used to silently delete anything older than
+  // 5 days on every single fetch, and had a per-item Delete button too. Both
+  // removed: nothing in this component deletes from doc_comments anymore.
   const historyQuery = useQuery({
     queryKey: ["comment-history", orgId],
     queryFn: async () => {
-      // Computed fresh on every fetch (not during render) — avoids calling
-      // the impure Date.now() while the component renders.
-      const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
-      await supabase
-        .from("doc_comments")
-        .delete()
-        .eq("org_id", orgId)
-        .lt("created_at", fiveDaysAgo);
-
       const { data, error } = await supabase
         .from("doc_comments")
         .select(
@@ -412,22 +405,6 @@ function CommentHistory({ orgId }: { orgId: string }) {
 
       if (error) throw error;
       return data as unknown as CommentWithPost[];
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: async (commentId: string) => {
-      const { error } = await supabase
-        .from("doc_comments")
-        .delete()
-        .eq("id", commentId);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["comment-history", orgId] });
-    },
-    onError: () => {
-      toast.error("Failed to delete comment");
     },
   });
 
@@ -463,20 +440,6 @@ function CommentHistory({ orgId }: { orgId: string }) {
               >
                 <Copy className="h-3 w-3 mr-1" />
                 Copy
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-destructive hover:text-destructive"
-                onClick={() => {
-                  if (window.confirm("Delete this comment? This can't be undone.")) {
-                    deleteMutation.mutate(item.id);
-                  }
-                }}
-                disabled={deleteMutation.isPending}
-              >
-                <Trash2 className="h-3 w-3 mr-1" />
-                Delete
               </Button>
             </div>
           </CardContent>
