@@ -22,7 +22,7 @@ import { Upload, Loader2, Copy, Check } from "lucide-react";
 import type { ToneSample } from "../types/database";
 
 export function Settings() {
-  const { currentOrg, currentOrgId, isLoading } = useOrganization();
+  const { currentOrg, currentOrgId, organizations, isLoading } = useOrganization();
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -31,7 +31,7 @@ export function Settings() {
   if (!currentOrg || !currentOrgId) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No account found.
+        No workspace found.
       </div>
     );
   }
@@ -41,18 +41,24 @@ export function Settings() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Manage your account settings
+          Settings for the "{currentOrg.name}" workspace. Switch workspaces from the picker in the
+          header — each one has its own settings, leads, and history.
         </p>
       </div>
 
-      <AccountSettingsCard
-        orgId={currentOrgId}
-        orgName={currentOrg.name}
-      />
+      {/* key={currentOrgId} forces this to remount (and reset its local
+          input state) whenever the workspace switcher changes workspace —
+          without it, the Name field would keep showing whatever was typed
+          for the PREVIOUS workspace until a manual page reload. */}
+      <AccountSettingsCard key={currentOrgId} orgId={currentOrgId} orgName={currentOrg.name} />
 
       <Separator />
 
       <ToneSection orgId={currentOrgId} systemPrompt={currentOrg.ai_system_prompt} />
+
+      <Separator />
+
+      <DangerZoneCard orgId={currentOrgId} orgName={currentOrg.name} canDelete={organizations.length > 1} />
     </div>
   );
 }
@@ -76,7 +82,7 @@ function AccountSettingsCard({
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Account settings saved");
+      toast.success("Workspace name saved");
       queryClient.invalidateQueries({ queryKey: ["organizations"] });
     },
     onError: () => {
@@ -87,7 +93,7 @@ function AccountSettingsCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Account</CardTitle>
+        <CardTitle>Workspace Name</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
@@ -339,5 +345,66 @@ function ToneSection({
         </div>
       )}
     </div>
+  );
+}
+
+function DangerZoneCard({
+  orgId,
+  orgName,
+  canDelete,
+}: {
+  orgId: string;
+  orgName: string;
+  canDelete: boolean;
+}) {
+  const { deleteOrg, isDeletingOrg } = useOrganization();
+  const [confirmText, setConfirmText] = useState("");
+
+  const handleDelete = async () => {
+    if (confirmText.trim() !== orgName) return;
+    await deleteOrg(orgId);
+    setConfirmText("");
+  };
+
+  return (
+    <Card className="border-destructive/50">
+      <CardHeader>
+        <CardTitle className="text-destructive">Danger Zone</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!canDelete ? (
+          <p className="text-sm text-muted-foreground">
+            This is your only workspace, so it can't be deleted. Create another workspace first if
+            you want to delete this one.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Deleting the "{orgName}" workspace permanently erases every lead, comment, DM, and
+              outreach message in it. This cannot be undone, and there is no automatic backup on
+              the free plan. Type the workspace name below to confirm.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="confirm-delete">
+                Type <span className="font-mono font-medium">{orgName}</span> to confirm
+              </Label>
+              <Input
+                id="confirm-delete"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder={orgName}
+              />
+            </div>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={confirmText.trim() !== orgName || isDeletingOrg}
+            >
+              {isDeletingOrg ? "Deleting..." : "Delete This Workspace"}
+            </Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

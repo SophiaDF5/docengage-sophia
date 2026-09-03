@@ -49,31 +49,61 @@ Run these commands in order. Do not skip any step.
 
 ## Account model
 
-There is no team/organization concept — every login is its own fully isolated account.
-A brand new signup starts completely empty; nothing is ever shared between logins.
+There is still no team/multi-USER concept — nobody else can ever log into your account,
+there are no roles (owner/admin/member), and nothing is ever shared between two different
+logins. That part of migration 012 stands.
 
-Under the hood, `doc_organizations` still exists as a table (kept for historical/low-risk
-reasons — see migration 012) and every other table still carries an `org_id` column, but it
-is now purely an internal per-account identifier:
+What changed since migration 012: a single login can now own multiple `doc_organizations`
+rows — called "workspaces" in the UI — instead of exactly one. This is for one person (e.g.
+an agency) running fully separate lead lists/comments/DMs per client under one login,
+switchable from the picker in the header, rather than needing a separate email/account per
+client. `doc_organizations` is still the literal table name (kept for historical reasons —
+see migration 012's comment block), and every other table still carries the same `org_id`
+column it always has.
 
-- Every user gets exactly one `doc_organizations` row, auto-created by the
-  `doc_on_auth_user_created` trigger the moment they sign up (no manual SQL setup needed
-  for new accounts anymore).
-- `doc_user_org_ids()` — the function every table's RLS policy calls — was redefined in
-  migration 012 to return only the caller's own account row instead of "every org I'm a
-  member of." This means every existing table's policy automatically enforces per-account
-  isolation with zero per-table changes.
-- `doc_organization_members` (the old team/roles table) is dropped. There are no roles
-  (owner/admin/member) anymore — every account is simply its own owner.
-- The frontend never shows an org switcher, never lets you invite a teammate, and never
-  asks you to pick a workspace. `useOrganization()` just resolves to "your account."
+- A brand new signup still auto-gets exactly one `doc_organizations` row from the
+  `doc_on_auth_user_created` trigger — nothing changed there. The difference is the user can
+  now create MORE of them afterward from the workspace switcher (`WorkspaceSwitcher.tsx`),
+  each one starting completely empty, fully isolated from their other workspaces.
+- `doc_user_org_ids()` — the function every table's RLS policy calls — did NOT need to
+  change for this. It was already defined (migration 012) as
+  `select id from doc_organizations where user_id = auth.uid()`, a set-returning function.
+  There was also never a unique constraint on `doc_organizations.user_id`. So it already
+  returned every org row a user owns, not just one — "one org per user" was purely a
+  product/UX convention (one auto-created row, no UI to make more), never a DB-level limit.
+  Every table's RLS policy across the whole app therefore already enforces correct
+  per-account isolation for the multi-workspace case with zero per-table or per-policy
+  changes — the exact "stays just as cheap" payoff migration 012's own comment predicted.
+- RLS is the SECURITY boundary (User A can never see User B's data, regardless of how many
+  workspaces either of them has) but is NOT the day-to-day filter between a user's OWN
+  workspaces — a query with no `org_id` filter would return that user's data combined
+  across all their workspaces. Isolation between one person's own workspaces is enforced by
+  the frontend always scoping every query by `currentOrgId` from `useOrganization()`, the
+  same pattern every page already used before this change. Any new query must follow it.
+- `doc_organization_members` (the old team/roles table) is still dropped and still not
+  coming back — this feature is "more workspaces for one person," not multi-user sharing.
+- The frontend now DOES show a workspace switcher (`WorkspaceSwitcher.tsx`, in the header)
+  that lets you switch, create, and — in Settings' danger zone — rename or delete a
+  workspace. `useOrganization()` returns the full list plus the current selection instead of
+  resolving to a single implicit "your account."
+- Deleting a workspace cascades (every table's `org_id` FK is `on delete cascade`) and
+  permanently wipes everything in it — see Settings.tsx's confirmation flow. The free
+  Supabase plan has no automatic backups; see `scripts/backup-leads.mjs`.
+- Known limitation: rate limiting (`rateLimit()`, see Rule 4's middleware chain) is keyed by
+  `user_id`, not `org_id` — usage limits are shared across all of one user's workspaces, not
+  per-workspace. Not changed as part of this — revisit if it becomes a real problem for
+  someone running several active client workspaces at once.
+- If you're setting up a Make.com scenario or any other integration that takes an `org_id`
+  (e.g. `doc_inbound_post`, `doc_approve_comment`), make sure it points at the correct
+  workspace's `org_id` — these aren't auto-detected from "whichever workspace is currently
+  open in the browser," since the call isn't coming from the browser.
 
 If you're adding a new table, follow the same pattern as every existing one: `org_id`
 column + RLS policies scoped through `doc_user_org_ids()`. Don't scope directly off
 `user_id` in new policies (except the three documented owner-only policies on
 `doc_organizations` itself) — keeping every table routed through the one function is what
-made this refactor a single migration instead of touching every policy individually, and
-it means a future access-model change (if one is ever needed again) stays just as cheap.
+made both this and the migration 012 refactor cheap, and it means a future access-model
+change stays just as cheap again.
 
 ## Rules
 
@@ -224,7 +254,9 @@ it means a future access-model change (if one is ever needed again) stays just a
 - src/pages/auth/VerifyCode.tsx → "Check your email" page. Enter the 6-digit code → calls doc_verify_email → if we still have the password from Register's route state, signs the user in immediately and lands them in the app; otherwise sends them to /login. Includes a 60s-cooldown "Resend Code" button (doc_resend_code). Falls back to an editable email field if opened without route state (e.g. a page refresh lost it).
 - src/pages/auth/Login.tsx → Unchanged sign-in form, plus a "Register" link, plus: if `signInWithPassword` fails with "email not confirmed," redirects to /verify with the email+password the user just typed instead of showing a dead-end error.
 - src/pages/KeywordSearch.tsx → "Keyword Search" page. Type a topic (e.g. "AI and healthcare") → calls doc_search_keyword_leads → shows a preview list (name, headline, their post + link, posted date) with checkboxes, nothing saved yet. Selecting leads and clicking "Save Selected as Leads" upserts them into doc_contacts with `source = 'keyword_search'`, `matched_keyword`, and the post context (`source_post_url`/`source_post_excerpt`/`source_post_date`) — see migration 016. Below the search box, a second table shows everything already saved this way (own the `source = 'keyword_search'` rows, mirroring how Scraped Leads owns `'scraped'` and Manual Added Leads owns `'manual'`), with the same Status dropdown/CustomFieldsDialog/EditContactDialog/delete-with-confirm pattern as those pages, sharing `["contacts", orgId]` for the same cross-page sync.
-- src/pages/Settings.tsx      → Account settings (name), plus a Tone & Voice section that uploads audio/text samples and transcribes them via doc_process_tone. That transcription no longer drives Comment or DM tone (both are permanently the hardcoded Atiba persona — see `_shared/atiba-persona.ts`); the section is kept so Reina can pull a raw Whisper transcript (via the "View Transcript" button added for this) as source material when hand-tuning that file. No team/member management — see "Account model" above.
+- src/pages/Settings.tsx      → Settings for whichever workspace is currently selected (see "Account model" above) — workspace name, a Tone & Voice section that uploads audio/text samples and transcribes them via doc_process_tone (that transcription no longer drives Comment or DM tone — both are permanently the hardcoded Atiba persona, see `_shared/atiba-persona.ts` — the section is kept so Reina can pull a raw Whisper transcript via the "View Transcript" button as source material when hand-tuning that file), and a danger zone to delete the current workspace (disabled if it's the user's only one; cascades and permanently wipes everything in it, type-the-name-to-confirm). Still no team/member management — that's a different, unrelated axis from workspaces; see "Account model."
+- src/hooks/useOrganization.ts → Fetches every workspace (`doc_organizations` row) the logged-in user owns, tracks which one is "current" (self-healing against a stale/missing localStorage selection — see the file's header comment), and exposes switchOrg/createOrg/renameOrg/deleteOrg. Every page that reads `currentOrgId` from this hook is unaffected by there now being more than one workspace — they already scoped every query by org id.
+- src/components/WorkspaceSwitcher.tsx → Header dropdown (always visible, including on mobile — which page every nav item shows depends on which workspace is selected) to switch between workspaces or create a new one. Renaming/deleting a workspace is deliberately kept in Settings instead, next to that workspace's other settings.
 - src/pages/DmAssistant.tsx   → AI-drafted DM replies/openers for one conversation at a time, backed by doc_dm_drafts history
 - src/pages/Leads.tsx         → "Engaged Leads" page. Manually curated lead list (name/bio/LinkedIn URL) feeding DM Assistant context, backed by doc_dm_leads — has its own status pipeline (pending/messaged/engaged) matching doc_contacts. Also merges in (read-only structurally, but fully editable) any doc_contacts row — Scraped or Manual — whose `status` is `messaged` or `engaged`, using the same `["contacts", orgId]` query key as Scraped/Manual Added Leads. This is a display-time merge, not a data copy: there's still exactly one row per lead, status changes and custom fields write back to whichever table it actually lives in, and setting a merged-in lead's status back to `pending` just makes it disappear from this page (no delete needed). Deleting a merged-in lead is only available from its home page (Scraped Leads / Manual Added Leads), to avoid the appearance of two separate records for one person.
 - src/pages/Outreach.tsx      → Unified outreach queue merging doc_contacts (scraped + manual) and doc_dm_leads (engaged) into one list. Filtering is layered: Source (Scraped/Engaged/Manual Added, multi-select) narrows which tables/rows are in scope; Status (Pending/Messaged/Engaged) and Tag (built dynamically from whatever tags exist among the source-filtered leads, plus an "Untagged" bucket) further refine within that scope — all three (Source/Status/Tag) use "empty selection = no restriction, click a chip to add one" so they default to showing everything (Source used to default to "all selected, click removes" — inconsistent with Status/Tag and caused deselecting every Source chip to silently show zero leads with no explanation; fixed to match); a text search box matches name/headline. All four combine (AND). "Invited" is a status value (migration 015), not a tag — set it from the same Status dropdown as Pending/Messaged/Engaged on Scraped Leads, Manual Added Leads, or Engaged Leads, or directly here: every lead row (both the picker list and the review queue) now has its own Status dropdown (Pending/Invited/Messaged/Engaged) so status can be changed without leaving Outreach; it then filters here the same way as the other three statuses. (An earlier iteration used a separate freeform tag for "Invited" — reverted per explicit feedback that it belonged in Status, not Tag.) No upload here anymore — CSV/Excel upload lives on the Manual Added Leads page (see above); this page only composes/sends. Draft messages (bulk or AI-personalized), assisted-send (copies message + opens LinkedIn — never sends automatically, per Out of Scope section). Logs to doc_outreach_messages against whichever source table (`contact_id` or `dm_lead_id`) the lead came from, and writes status back to that same table — see "Status sync" note under doc_outreach_messages below
@@ -279,22 +311,24 @@ reads/writes this table.
 Indexes: doc_email_verifications_email_idx
 
 ### doc_organizations
-One row per user — an internal per-account settings container, not a user-facing
-"organization." Auto-created by the `doc_on_auth_user_created` trigger on signup (migration
-012). See "Account model" above.
+One or more rows per user — an internal per-workspace settings container, not a
+user-facing "organization" (no multi-user sharing — see "Account model" above). Exactly one
+row is auto-created by the `doc_on_auth_user_created` trigger on signup; a user can create
+additional rows afterward from the workspace switcher (`WorkspaceSwitcher.tsx`) to run
+separate, fully isolated lead lists/comments/DMs under the same login (e.g. one per client).
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | uuid | PK, default gen_random_uuid() |
-| user_id | uuid | FK → auth.users, not null, default auth.uid(), effectively unique (one row per user going forward) |
+| user_id | uuid | FK → auth.users, not null, default auth.uid() — NOT unique; a user can own multiple rows (multiple workspaces), see "Account model" |
 | name | text | not null |
 | auto_post_enabled | boolean | not null, default false |
-| ai_system_prompt | text | |
+| ai_system_prompt | text | no longer read by Comment/DM generation — see `_shared/atiba-persona.ts` |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
-Policies: doc_organizations_select_member (resolves to "my own row" — see doc_user_org_ids()), doc_organizations_insert_auth (creator), doc_organizations_update_owner (owner only), doc_organizations_delete_owner (owner only)
-Indexes: doc_organizations_user_id_idx
+Policies: doc_organizations_select_own, doc_organizations_insert_own, doc_organizations_update_own, doc_organizations_delete_own (all scoped to `user_id = auth.uid()` — unchanged since migration 001, already correct for "a user may touch any/all of their own rows")
+Indexes: doc_organizations_user_id_idx (non-unique)
 
 **doc_organization_members was dropped in migration 012** along with the team/roles concept
 (owner/admin/member). There is no equivalent table anymore — don't recreate it without a

@@ -1,5 +1,6 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
+import { WorkspaceSwitcher } from "../WorkspaceSwitcher";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
@@ -40,10 +41,17 @@ export function AppLayout() {
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex h-14 items-center px-4 sm:px-6">
-          <Link to="/" className="mr-4 sm:mr-6 flex items-center gap-2 font-semibold text-lg shrink-0">
+          <Link to="/" className="mr-2 sm:mr-4 flex items-center gap-2 font-semibold text-lg shrink-0">
             <img src="/favicon.svg" alt="" className="h-6 w-6 rounded-md" />
             <span className="hidden sm:inline">DocEngage</span>
           </Link>
+
+          {/* Always visible, even on mobile — which workspace you're in
+              changes what data every page shows, so it shouldn't be hidden
+              behind a breakpoint the way the nav and email are. */}
+          <div className="mr-2 sm:mr-4 shrink-0">
+            <WorkspaceSwitcher />
+          </div>
 
           {/* Desktop nav — hidden below md, where it wouldn't fit (7 items
               plus logo plus account info in one row). */}

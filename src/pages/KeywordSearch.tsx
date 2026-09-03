@@ -210,7 +210,7 @@ export function KeywordSearch() {
   if (!currentOrgId) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No account found.
+        No workspace found.
       </div>
     );
   }
