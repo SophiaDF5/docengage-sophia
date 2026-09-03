@@ -6,6 +6,7 @@ import { Label } from "./ui/label";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -60,18 +61,23 @@ export function WorkspaceSwitcher() {
           <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-[220px]">
-          <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-          {organizations.map((org) => (
-            <DropdownMenuItem key={org.id} onClick={() => switchOrg(org.id)}>
-              <Check
-                className={cn(
-                  "h-4 w-4 mr-2 shrink-0",
-                  org.id === currentOrgId ? "opacity-100" : "opacity-0"
-                )}
-              />
-              <span className="truncate">{org.name}</span>
-            </DropdownMenuItem>
-          ))}
+          {/* DropdownMenuLabel renders base-ui's Menu.GroupLabel, which
+              requires a MenuGroupContext from an enclosing Menu.Group —
+              without this wrapper it throws Base UI error #31 at runtime. */}
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+            {organizations.map((org) => (
+              <DropdownMenuItem key={org.id} onClick={() => switchOrg(org.id)}>
+                <Check
+                  className={cn(
+                    "h-4 w-4 mr-2 shrink-0",
+                    org.id === currentOrgId ? "opacity-100" : "opacity-0"
+                  )}
+                />
+                <span className="truncate">{org.name}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
