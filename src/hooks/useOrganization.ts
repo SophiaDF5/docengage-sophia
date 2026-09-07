@@ -8,6 +8,22 @@ const CURRENT_ORG_STORAGE_KEY = "doc_current_org_id";
 
 const ORG_COLUMNS = "id, user_id, name, auto_post_enabled, ai_system_prompt, created_at, updated_at";
 
+// Supabase/PostgREST errors (RLS violations, constraint failures, etc.) are
+// plain objects shaped like `{ message, details, hint, code }` — they are
+// NOT `instanceof Error`, so `err instanceof Error ? err.message : fallback`
+// (the pattern used elsewhere in this app) always falls through to the
+// generic fallback text for exactly the errors most worth seeing. This pulls
+// `.message` off anything that has one, Error or not, so real failures
+// (e.g. an RLS policy rejecting the insert) show their actual reason instead
+// of a generic "Failed to..." with no way to diagnose it.
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object" && "message" in err && typeof err.message === "string") {
+    return err.message;
+  }
+  return fallback;
+}
+
 // Reina asked to support separate, fully isolated "workspaces" under one
 // login (e.g. one per client) — see claude.md's "Account model" section for
 // the full history. The backend needed ZERO RLS/schema changes for this:
@@ -94,7 +110,7 @@ export function useOrganization() {
       toast.success(`"${newOrg.name}" workspace created`);
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Failed to create workspace");
+      toast.error(errorMessage(err, "Failed to create workspace"));
     },
   });
 
@@ -113,7 +129,7 @@ export function useOrganization() {
       toast.success("Workspace deleted");
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Failed to delete workspace");
+      toast.error(errorMessage(err, "Failed to delete workspace"));
     },
   });
 
@@ -132,7 +148,7 @@ export function useOrganization() {
       toast.success("Workspace renamed");
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Failed to rename workspace");
+      toast.error(errorMessage(err, "Failed to rename workspace"));
     },
   });
 
