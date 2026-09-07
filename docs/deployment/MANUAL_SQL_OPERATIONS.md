@@ -3,7 +3,13 @@
 SQL operations that must be run manually in the Supabase SQL Editor per environment
 before deploying. Check each item after running it.
 
-## Right now (pending as of 2026-09-01, updated)
+## Right now (pending as of 2026-09-07, updated)
+
+- [ ] **Migration 018** — re-asserts `doc_organizations`' four RLS policies directly (idempotent —
+  drops every policy name this table has ever had, then recreates the canonical four). Fixes
+  "new row violates row-level security policy for table doc_organizations" when creating a new
+  workspace from the header switcher. See its section below — **run this one first**, it's a
+  one-minute paste-and-run with no dependencies.
 
 Migrations 010–016 should already be applied (tags, custom fields, account isolation, Invited
 status, and Keyword Search). Two more things are pending, for the new public registration feature:
@@ -354,6 +360,44 @@ where tablename = 'doc_email_verifications';
 ```
 The first should return one row; the second should show `rowsecurity = true`.
 
+### Migration 018 — paste this into the SQL Editor (no dependency on other pending migrations)
+
+```sql
+begin;
+
+drop policy if exists "doc_organizations_select_own" on public.doc_organizations;
+drop policy if exists "doc_organizations_insert_own" on public.doc_organizations;
+drop policy if exists "doc_organizations_update_own" on public.doc_organizations;
+drop policy if exists "doc_organizations_delete_own" on public.doc_organizations;
+drop policy if exists "doc_organizations_select_member" on public.doc_organizations;
+drop policy if exists "doc_organizations_insert_auth" on public.doc_organizations;
+drop policy if exists "doc_organizations_update_owner" on public.doc_organizations;
+drop policy if exists "doc_organizations_delete_owner" on public.doc_organizations;
+
+create policy "doc_organizations_select_own" on public.doc_organizations
+  for select using (user_id = auth.uid());
+
+create policy "doc_organizations_insert_own" on public.doc_organizations
+  for insert with check (user_id = auth.uid());
+
+create policy "doc_organizations_update_own" on public.doc_organizations
+  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+create policy "doc_organizations_delete_own" on public.doc_organizations
+  for delete using (user_id = auth.uid());
+
+commit;
+```
+
+Verify with:
+```sql
+select policyname, cmd from pg_policies where tablename = 'doc_organizations' order by cmd;
+```
+You should see exactly 4 rows: `doc_organizations_select_own` (SELECT), `doc_organizations_insert_own`
+(INSERT), `doc_organizations_update_own` (UPDATE), `doc_organizations_delete_own` (DELETE) — no
+other doc_organizations policy names. Then try creating a new workspace from the header switcher
+again; it should succeed instead of showing the RLS error.
+
 ## Deploy edge functions
 
 Run these from the project root on your own machine (not in this chat — CLI auth tokens should
@@ -465,7 +509,7 @@ without them, the build produces a broken bundle (this was one of the causes of 
   where tablename like 'doc_%'
     and qual::text like '%user_id = auth.uid()%';
   ```
-  Only `doc_organizations_insert_auth`, `doc_organizations_update_owner`, and `doc_organizations_delete_owner` should appear (these are intentionally owner-scoped).
+  Only `doc_organizations_insert_own`, `doc_organizations_update_own`, and `doc_organizations_delete_own` should appear (these are intentionally owner-scoped — see migration 018).
 - [ ] Verify storage bucket is private:
   ```sql
   select id, public from storage.buckets where id = 'doc_tone_uploads';
