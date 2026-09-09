@@ -4,6 +4,7 @@ import { rateLimit } from "../_shared/rate-limit.ts";
 import { safeError } from "../_shared/error-handler.ts";
 import { validateBody, z } from "../_shared/validate.ts";
 import { callOpenAI, callOpenAIVision } from "../_shared/openai.ts";
+import { normalizePostUrl } from "../_shared/linkedin.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const GenerateCommentSchema = z.object({
@@ -12,13 +13,29 @@ const GenerateCommentSchema = z.object({
   content: z.string().min(1).max(10000).optional(),
   author_name: z.string().max(200).optional(),
   author_headline: z.string().max(500).optional(),
+  author_linkedin_url: z.string().url().optional(),
+  lead_id: z.string().uuid().optional(), // Look up bio/links/custom fields we already hold
   linkedin_post_url: z.string().url().optional(),
   image_path: z.string().optional(), // Storage path for image mode
+
+  // Replying to a comment on the post rather than to the post itself.
+  // Either point at a comment we already harvested (reply_to_comment_id,
+  // which brings the post with it), or paste one in.
+  reply_to_comment_id: z.string().uuid().optional(),
+  reply_to_name: z.string().max(200).optional(),
+  reply_to_headline: z.string().max(500).optional(),
+  reply_to_linkedin_url: z.string().url().optional(),
+  reply_to_text: z.string().min(1).max(5000).optional(),
 }).refine(
   (d) => {
-    if (d.mode === "caption" && !d.content) return false;
+    // A saved comment carries its own post, so the caller does not have to
+    // send the post text again.
+    if (d.mode === "caption" && !d.content && !d.reply_to_comment_id) return false;
     if (d.mode === "link" && (!d.content || !d.linkedin_post_url)) return false;
     if (d.mode === "image" && !d.image_path) return false;
+    // A pasted comment has to say who said it — a reply addressed to nobody
+    // is the generic draft this whole change exists to stop.
+    if (d.reply_to_text && !d.reply_to_comment_id && !d.reply_to_name) return false;
     return true;
   },
   { message: "Missing required fields for the selected mode" }
@@ -38,10 +55,90 @@ IMPORTANT: You are NOT a doctor. Never use medical terminology, clinical languag
 
 Follow this structure for EVERY comment:
 1. Acknowledge — connect with what the author shared personally or validate it
-2. Add insight — a brief perspective from your OWN experience as a business owner/CEO
-3. Follow-up question — end with a simple, genuine question to keep the conversation going
+2. Add insight — a brief perspective from your OWN experience as a business owner/CEO. Refer to something SPECIFIC the author actually wrote — name the detail, the number, the moment they described. If your comment could be pasted under a different post and still make sense, it is wrong and you must rewrite it.
+3. Open-ended question — end with a question that CANNOT be answered "yes" or "no". Begin it with why, how, what, or what if. A closed question ends the conversation; an open one is the whole point of commenting. Never open the question with "Have you", "Do you", "Did you", "Is that", "Would you", "Are you", or anything else answerable in one word.
 
 Keep it to 2-4 sentences. Sound like a real human having a conversation, not an AI or a press release. Never use phrases like "Great post!", "Thanks for sharing!", or "Wow..." — go straight to the substance.`;
+
+/**
+ * Everything we already know about the person, folded into the prompt.
+ * The app was storing all of this and sending none of it, which is why the
+ * drafts read like they could have been written for anyone.
+ */
+function buildAuthorContext(parts: {
+  name?: string | null;
+  headline?: string | null;
+  profileUrl?: string | null;
+  bio?: string | null;
+  links?: string | null;
+  customFields?: Record<string, unknown> | null;
+}): string {
+  const lines: string[] = [];
+  if (parts.name) lines.push(`Name: ${parts.name}`);
+  if (parts.headline) lines.push(`LinkedIn headline: ${parts.headline}`);
+  if (parts.profileUrl) lines.push(`Profile: ${parts.profileUrl}`);
+  if (parts.bio) lines.push(`What we know about them: ${parts.bio}`);
+  if (parts.links) lines.push(`Their links: ${parts.links}`);
+  if (parts.customFields) {
+    for (const [key, value] of Object.entries(parts.customFields)) {
+      if (typeof value === "string" && value.trim()) lines.push(`${key}: ${value}`);
+    }
+  }
+  if (lines.length === 0) return "";
+  return `\n\nAbout the person who wrote this post:\n${lines.join("\n")}`;
+}
+
+/**
+ * Replying to a comment is a different job from commenting on a post, and
+ * getting it wrong is obvious to everyone reading the thread: the reply
+ * praises a post the commenter did not write, or answers a point they did
+ * not make. So the structure is restated against the commenter, and the post
+ * is demoted to background.
+ *
+ * The volley is unchanged — acknowledge, add something of your own, ask a
+ * question that cannot be closed — because that is the whole mechanism. The
+ * only thing that changes is who it is aimed at.
+ */
+function buildReplyInstructions(parts: {
+  commenterName: string;
+  commenterHeadline?: string | null;
+  commenterProfileUrl?: string | null;
+  commentText?: string | null;
+  postAuthorName?: string | null;
+}): string {
+  const who: string[] = [`Name: ${parts.commenterName}`];
+  if (parts.commenterHeadline) who.push(`LinkedIn headline: ${parts.commenterHeadline}`);
+  if (parts.commenterProfileUrl) who.push(`Profile: ${parts.commenterProfileUrl}`);
+
+  const postAuthor = parts.postAuthorName && parts.postAuthorName !== "Unknown"
+    ? `a post written by ${parts.postAuthorName}`
+    : "someone else's post";
+
+  const said = parts.commentText
+    ? parts.commentText
+    : "(their comment text was not captured — reply to the person, and do not invent what they said)";
+
+  return `
+
+YOU ARE WRITING A REPLY TO A COMMENT, NOT A COMMENT ON THE POST.
+
+${parts.commenterName} left a comment under ${postAuthor}. You are replying to ${parts.commenterName} in that thread, where they and everyone else reading the post will see it.
+
+Who you are replying to:
+${who.join("\n")}
+
+What they said:
+"""
+${said}
+"""
+
+The post is background. Reply to the COMMENT.
+1. Acknowledge what ${parts.commenterName} said — not what the post said.
+2. Add your own perspective as a business owner, and refer to something SPECIFIC in THEIR comment: their words, their example, the thing they noticed. If your reply would still make sense under a different person's comment, it is wrong and you must rewrite it.
+3. End with an open-ended question addressed to ${parts.commenterName}, beginning why, how, what, or what if. Never one they can answer in a single word.
+
+Never thank them for commenting, never compliment the post author here, and never hand ${parts.commenterName} their own point back as though it were yours.`;
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -64,7 +161,7 @@ Deno.serve(async (req: Request) => {
     const supabase = createUserClient(req);
     const { data: org, error: orgError } = await supabase
       .from("doc_organizations")
-      .select("ai_system_prompt")
+      .select("ai_system_prompt, auto_post_enabled")
       .eq("id", body.org_id)
       .single();
 
@@ -75,11 +172,139 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const systemPrompt = org.ai_system_prompt || DEFAULT_SYSTEM_PROMPT;
+    const basePrompt = org.ai_system_prompt || DEFAULT_SYSTEM_PROMPT;
+
+    // 3a. Work out what we are replying to, if anything.
+    //
+    // A saved comment brings its post with it, so the screen only has to send
+    // an id. A pasted comment carries its own details and needs the post text
+    // sent alongside it, which the schema enforces.
+    let replyTarget: {
+      parentCommentId: string | null;
+      commenterName: string;
+      commenterHeadline: string | null;
+      commenterProfileUrl: string | null;
+      commentText: string | null;
+    } | null = null;
+    let replyPostId: string | null = null;
+    let replyPostContent: string | null = null;
+    let replyPostAuthor: string | null = null;
+
+    if (body.reply_to_comment_id) {
+      const { data: parent, error: parentError } = await supabase
+        .from("doc_post_comments")
+        .select(
+          "id, post_id, commenter_name, commenter_headline, commenter_linkedin_url, comment_text, doc_posts(content, author_name)"
+        )
+        .eq("id", body.reply_to_comment_id)
+        .eq("org_id", body.org_id)
+        .maybeSingle();
+
+      if (parentError || !parent) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "That comment is not in your saved comments any more. Scrape the post again, or paste the comment in by hand.",
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const parentPost = Array.isArray(parent.doc_posts) ? parent.doc_posts[0] : parent.doc_posts;
+
+      replyTarget = {
+        parentCommentId: parent.id,
+        // The screen may override the name it shows, but never the identity
+        // we stored — that came from LinkedIn.
+        commenterName: parent.commenter_name,
+        commenterHeadline: parent.commenter_headline ?? null,
+        commenterProfileUrl: parent.commenter_linkedin_url ?? null,
+        commentText: parent.comment_text ?? body.reply_to_text ?? null,
+      };
+      replyPostId = parent.post_id;
+      replyPostContent = parentPost?.content ?? null;
+      replyPostAuthor = parentPost?.author_name ?? null;
+    } else if (body.reply_to_text || body.reply_to_name) {
+      replyTarget = {
+        parentCommentId: null,
+        commenterName: body.reply_to_name!,
+        commenterHeadline: body.reply_to_headline ?? null,
+        commenterProfileUrl: body.reply_to_linkedin_url ?? null,
+        commentText: body.reply_to_text ?? null,
+      };
+      replyPostAuthor = body.author_name ?? null;
+    }
+
+    // The post the reply sits under. A saved comment supplies it; anything
+    // typed on the screen wins, because the person is looking at the post.
+    const postContent = body.content ?? replyPostContent ?? null;
+
+    // 3b. Pull what we already hold about this person.
+    // Prefer the lead row (curated bio, links, custom fields); fall back to
+    // whatever the screen sent. A missing lead is not an error — it just
+    // means we comment with less.
+    let lead: {
+      name?: string | null;
+      bio?: string | null;
+      links?: string | null;
+      custom_fields?: Record<string, unknown> | null;
+    } | null = null;
+
+    if (body.lead_id) {
+      const { data } = await supabase
+        .from("doc_dm_leads")
+        .select("name, bio, links, custom_fields")
+        .eq("id", body.lead_id)
+        .eq("org_id", body.org_id)
+        .maybeSingle();
+      lead = data ?? null;
+    }
+
+    // Who the draft is actually about: the commenter when this is a reply,
+    // the post author otherwise.
+    const subjectUrl = replyTarget?.commenterProfileUrl ?? body.author_linkedin_url ?? null;
+
+    if (!lead && subjectUrl) {
+      // The profile URL lives in two columns: linkedin_profile_url (added in
+      // migration 010, which is what it means) and links (the freeform field
+      // the Comment Generator has been writing it into). Match either, so a
+      // lead saved by any screen is found.
+      const { data } = await supabase
+        .from("doc_dm_leads")
+        .select("name, bio, links, custom_fields")
+        .eq("org_id", body.org_id)
+        .or(`linkedin_profile_url.eq.${subjectUrl},links.eq.${subjectUrl}`)
+        .limit(1)
+        .maybeSingle();
+      lead = data ?? null;
+    }
+
+    // What we hold about whoever the draft is aimed at — the commenter on a
+    // reply, the post author otherwise.
+    const authorContextBlock = buildAuthorContext({
+      name: replyTarget?.commenterName ?? body.author_name ?? lead?.name ?? null,
+      headline: replyTarget?.commenterHeadline ?? body.author_headline ?? null,
+      profileUrl: replyTarget?.commenterProfileUrl ?? body.author_linkedin_url ?? null,
+      bio: lead?.bio ?? null,
+      links: lead?.links ?? null,
+      customFields: lead?.custom_fields ?? null,
+    });
+
+    const replyBlock = replyTarget
+      ? buildReplyInstructions({
+          commenterName: replyTarget.commenterName,
+          commenterHeadline: replyTarget.commenterHeadline,
+          commenterProfileUrl: replyTarget.commenterProfileUrl,
+          commentText: replyTarget.commentText,
+          postAuthorName: replyPostAuthor ?? body.author_name ?? null,
+        })
+      : "";
+
+    const systemPrompt = `${basePrompt}${authorContextBlock}${replyBlock}`;
 
     // 4. Generate comment based on mode
     let generatedContent: string | null = null;
-    let extractedContent = body.content ?? null;
+    const extractedContent = postContent;
 
     try {
       if (body.mode === "image") {
@@ -116,12 +341,32 @@ Deno.serve(async (req: Request) => {
               ? "image/webp"
               : "image/png";
 
-        generatedContent = await callOpenAIVision(systemPrompt, base64, mimeType);
+        const visionPrompt = replyTarget
+          ? `Read the LinkedIn post in this screenshot, then draft a reply to ${replyTarget.commenterName}'s comment on it. Reply to the comment, not to the post.`
+          : body.author_name
+            ? `Read the LinkedIn post in this screenshot — it was written by ${body.author_name} — and draft a comment on it.`
+            : "Read the LinkedIn post in this screenshot and draft a comment on it.";
+
+        generatedContent = await callOpenAIVision(systemPrompt, base64, mimeType, visionPrompt);
       } else {
         // Caption or link mode
-        const authorContext = body.author_name ?? "a LinkedIn user";
+        const authorContext = replyPostAuthor ?? body.author_name ?? "a LinkedIn user";
 
-        const userPrompt = `Draft a LinkedIn comment for this post by ${authorContext}:\n\n${body.content}`;
+        let userPrompt: string;
+        if (replyTarget) {
+          const postBlock = postContent
+            ? `The post (by ${authorContext}), for context only:\n\n${postContent}`
+            : `The post itself was not captured — you have only the comment.`;
+          userPrompt =
+            `${postBlock}\n\n` +
+            `Now draft your reply to ${replyTarget.commenterName}'s comment, quoted in your instructions. ` +
+            `Reply to the comment, not to the post.`;
+        } else {
+          userPrompt = `Draft a LinkedIn comment for this post by ${authorContext}:\n\n${postContent}`;
+        }
+        if (body.linkedin_post_url) {
+          userPrompt += `\n\n(Post URL: ${body.linkedin_post_url})`;
+        }
         generatedContent = await callOpenAI(systemPrompt, userPrompt);
       }
     } catch (aiErr) {
@@ -140,18 +385,48 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 5. Save post record
-    const { data: post, error: postError } = await supabase
-      .from("doc_posts")
-      .insert({
-        org_id: body.org_id,
-        linkedin_post_url: body.linkedin_post_url ?? `manual://${crypto.randomUUID()}`,
-        author_name: body.author_name ?? "Unknown",
-        author_headline: body.author_headline ?? null,
-        content: extractedContent,
-      })
-      .select("id")
-      .single();
+    // 5. Save post record.
+    // doc_posts is unique on (org_id, linkedin_post_url), so a real URL that
+    // has been commented on before must reuse its existing row rather than
+    // blow up on the constraint. Only fall back to a synthetic URL when the
+    // screen genuinely has no post link to give us.
+    const normalizedPostUrl = body.linkedin_post_url
+      ? normalizePostUrl(body.linkedin_post_url)
+      : null;
+    const postUrl = normalizedPostUrl ?? `manual://${crypto.randomUUID()}`;
+
+    let post: { id: string } | null = null;
+    let postError: unknown = null;
+
+    // Replying to a saved comment: we already know which post it sits under,
+    // so never look one up and never create a second row for it.
+    if (replyPostId) {
+      post = { id: replyPostId };
+    } else if (normalizedPostUrl) {
+      const { data: existingPost } = await supabase
+        .from("doc_posts")
+        .select("id")
+        .eq("org_id", body.org_id)
+        .eq("linkedin_post_url", postUrl)
+        .maybeSingle();
+      post = existingPost ?? null;
+    }
+
+    if (!post) {
+      const { data: inserted, error: insertError } = await supabase
+        .from("doc_posts")
+        .insert({
+          org_id: body.org_id,
+          linkedin_post_url: postUrl,
+          author_name: body.author_name ?? "Unknown",
+          author_headline: body.author_headline ?? null,
+          content: extractedContent,
+        })
+        .select("id")
+        .single();
+      post = inserted ?? null;
+      postError = insertError;
+    }
 
     if (postError || !post) {
       console.error("Failed to insert post:", postError);
@@ -162,16 +437,44 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 6. Save comment record
+    // 5b. A scraped post has no text — the comments dataset does not carry
+    // it. If the person pasted it in while replying, keep it, so the next
+    // reply under the same post starts with the context already there. This
+    // only ever fills a gap: the `is null` guard means a post we already have
+    // the words for is never overwritten.
+    if (replyPostId && postContent && !replyPostContent) {
+      const { error: fillError } = await supabase
+        .from("doc_posts")
+        .update({ content: postContent })
+        .eq("id", replyPostId)
+        .eq("org_id", body.org_id)
+        .is("content", null);
+      if (fillError) console.error("Failed to save post text:", fillError.message);
+    }
+
+    // 6. Save comment record.
+    // A draft the model just wrote has not been approved by anyone, so it is
+    // saved pending — the same status doc_inbound_post uses — and the human
+    // approves it when they take it (doc_approve_comment). Stamping
+    // approved_by at generation time recorded a decision nobody had made.
+    const initialStatus = org.auto_post_enabled ? "approved" : "pending";
+
     const { data: comment, error: commentError } = await supabase
       .from("doc_comments")
       .insert({
         post_id: post.id,
         org_id: body.org_id,
         generated_content: generatedContent,
-        status: "approved",
-        approved_by: user.id,
+        status: initialStatus,
+        approved_by: org.auto_post_enabled ? user.id : null,
         source: body.mode,
+        // Null on a normal comment. On a reply, the pointer plus a copy of
+        // who said what — the copy is what keeps the reply readable in the
+        // history after the post is re-scraped or the comment row goes.
+        parent_comment_id: replyTarget?.parentCommentId ?? null,
+        reply_to_name: replyTarget?.commenterName ?? null,
+        reply_to_linkedin_url: replyTarget?.commenterProfileUrl ?? null,
+        reply_to_text: replyTarget?.commentText ?? null,
       })
       .select("id")
       .single();
@@ -186,6 +489,8 @@ Deno.serve(async (req: Request) => {
           comment_id: comment?.id ?? null,
           post_id: post.id,
           generated_content: generatedContent,
+          is_reply: !!replyTarget,
+          replied_to: replyTarget?.commenterName ?? null,
           saved: true,
         },
       }),
