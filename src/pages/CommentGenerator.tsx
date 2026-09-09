@@ -65,23 +65,41 @@ export function CommentGenerator() {
 
 function OutputArea({
   content,
+  commentId,
   isLoading,
   onRegenerate,
 }: {
   content: string | null;
+  commentId?: string | null;
   isLoading: boolean;
   onRegenerate: () => void;
 }) {
   const [edited, setEdited] = useState(content ?? "");
+  const queryClient = useQueryClient();
 
   // Sync when new content arrives
   useEffect(() => {
     if (content) setEdited(content);
   }, [content]);
 
+  // Copying is the moment a human takes the draft, so that is the approval —
+  // and it is the only point at which we learn what they changed. Drafts are
+  // saved pending; this is what moves them, via the existing approve function.
   const handleCopy = async () => {
     await navigator.clipboard.writeText(edited);
     toast.success("Copied to clipboard");
+
+    if (!commentId || !edited.trim()) return;
+    try {
+      await callEdgeFunction("doc_approve_comment", {
+        comment_id: commentId,
+        edited_content: edited,
+      });
+      queryClient.invalidateQueries({ queryKey: ["comment-history"] });
+    } catch {
+      // The clipboard already has it; a failed status write must not look
+      // like a failed copy.
+    }
   };
 
   if (isLoading) {
@@ -136,6 +154,7 @@ function CaptionMode({ orgId }: { orgId: string }) {
   const [content, setContent] = useState("");
   const [authorName, setAuthorName] = useState("");
   const [authorLinkedin, setAuthorLinkedin] = useState("");
+  const [postUrl, setPostUrl] = useState("");
   const queryClient = useQueryClient();
 
   const saveLeadIfNew = async () => {
@@ -170,6 +189,8 @@ function CaptionMode({ orgId }: { orgId: string }) {
         mode: "caption",
         content,
         author_name: authorName || undefined,
+        author_linkedin_url: authorLinkedin.trim() || undefined,
+        linkedin_post_url: postUrl.trim() || undefined,
       });
     },
     onSuccess: async () => {
@@ -210,6 +231,18 @@ function CaptionMode({ orgId }: { orgId: string }) {
           />
         </div>
       </div>
+      <div className="space-y-2">
+        <Label>Post URL</Label>
+        <Input
+          value={postUrl}
+          onChange={(e) => setPostUrl(e.target.value)}
+          placeholder="https://linkedin.com/posts/..."
+        />
+        <p className="text-xs text-muted-foreground">
+          Optional, but it keeps every comment on the same post together
+          instead of creating a new record each time.
+        </p>
+      </div>
       {authorName.trim() && authorLinkedin.trim() && (
         <p className="text-xs text-muted-foreground">
           This person will be saved to Engaged Leads after generation.
@@ -227,6 +260,7 @@ function CaptionMode({ orgId }: { orgId: string }) {
       </Button>
       <OutputArea
         content={mutation.data?.data?.generated_content ?? null}
+        commentId={mutation.data?.data?.comment_id ?? null}
         isLoading={mutation.isPending}
         onRegenerate={() => mutation.mutate()}
       />
@@ -273,6 +307,7 @@ function ImageMode({ orgId }: { orgId: string }) {
         mode: "image",
         image_path: imagePath,
         author_name: authorName || undefined,
+        author_linkedin_url: authorLinkedin.trim() || undefined,
       });
     },
     onSuccess: async () => {
@@ -368,6 +403,7 @@ function ImageMode({ orgId }: { orgId: string }) {
       </div>
       <OutputArea
         content={mutation.data?.data?.generated_content ?? null}
+        commentId={mutation.data?.data?.comment_id ?? null}
         isLoading={mutation.isPending}
         onRegenerate={() => {
           if (fileInputRef.current) fileInputRef.current.click();
@@ -379,17 +415,16 @@ function ImageMode({ orgId }: { orgId: string }) {
 
 function CommentHistory({ orgId }: { orgId: string }) {
   const queryClient = useQueryClient();
-  const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
 
   const historyQuery = useQuery({
     queryKey: ["comment-history", orgId],
     queryFn: async () => {
-      await supabase
-        .from("doc_comments")
-        .delete()
-        .eq("org_id", orgId)
-        .lt("created_at", fiveDaysAgo);
-
+      // Reading the history used to delete everything older than five days.
+      // That is a write hidden inside a read, and it destroyed the record of
+      // what we have already said to a person — the one thing that stops us
+      // repeating ourselves. The list is capped at 20 below; that is what
+      // keeps this screen short, not deletion. Individual drafts can still be
+      // deleted by hand with the button on each card.
       const { data, error } = await supabase
         .from("doc_comments")
         .select(

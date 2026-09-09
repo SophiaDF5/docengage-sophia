@@ -73,7 +73,8 @@ export async function callOpenAI(
 export async function callOpenAIVision(
   systemPrompt: string,
   imageBase64: string,
-  mimeType = "image/png"
+  mimeType = "image/png",
+  userPrompt = "Read the LinkedIn post in this screenshot and draft a thoughtful comment."
 ): Promise<string | null> {
   const apiKey = getApiKey();
   if (!apiKey) return null;
@@ -94,7 +95,7 @@ export async function callOpenAIVision(
             content: [
               {
                 type: "text",
-                text: "Read the LinkedIn post in this screenshot and draft a thoughtful comment.",
+                text: userPrompt,
               },
               {
                 type: "image_url",

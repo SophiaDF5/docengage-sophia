@@ -10,7 +10,7 @@ import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { Skeleton } from "../components/ui/skeleton";
 import { Copy, RefreshCw, Loader2, Trash2 } from "lucide-react";
-import type { DmDraft } from "../types/database";
+import type { DmDraft, DmLead } from "../types/database";
 
 interface GenerateDmResult {
   data: {
@@ -26,6 +26,28 @@ export function DmAssistant() {
   const [myLastReply, setMyLastReply] = useState("");
   const [theirLastReply, setTheirLastReply] = useState("");
   const [newTopic, setNewTopic] = useState("");
+  const [leadId, setLeadId] = useState("");
+
+  // The DM function has always accepted the person's name, bio and links —
+  // this screen just never sent them, so every reply was written cold about
+  // someone we already have a record of. Shares the ["dm-leads"] cache key
+  // with the Leads pages.
+  const leadsQuery = useQuery({
+    queryKey: ["dm-leads", currentOrgId],
+    queryFn: async () => {
+      if (!currentOrgId) return [];
+      const { data, error } = await supabase
+        .from("doc_dm_leads")
+        .select("*")
+        .eq("org_id", currentOrgId)
+        .order("name");
+      if (error) throw error;
+      return data as DmLead[];
+    },
+    enabled: !!currentOrgId,
+  });
+
+  const selectedLead = (leadsQuery.data ?? []).find((l) => l.id === leadId);
 
   // Generate DM
   const mutation = useMutation({
@@ -35,6 +57,9 @@ export function DmAssistant() {
         my_last_reply: myLastReply || undefined,
         their_last_reply: theirLastReply || undefined,
         new_topic: newTopic || undefined,
+        lead_name: selectedLead?.name || undefined,
+        lead_bio: selectedLead?.bio || undefined,
+        lead_links: selectedLead?.links || undefined,
       });
     },
     onSuccess: () => {
@@ -80,6 +105,27 @@ export function DmAssistant() {
 
       {/* Conversation fields */}
       <div className="space-y-4">
+        <div className="space-y-2">
+          <Label>Who are you messaging?</Label>
+          <select
+            value={leadId}
+            onChange={(e) => setLeadId(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <option value="">No one selected — write without their details</option>
+            {(leadsQuery.data ?? []).map((lead) => (
+              <option key={lead.id} value={lead.id}>
+                {lead.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            {selectedLead
+              ? "Their bio and links go to the draft, so the reply can be about them."
+              : "Pick someone and the draft uses what we already know about them."}
+          </p>
+        </div>
+
         <div className="space-y-2">
           <Label>My Last Reply</Label>
           <Textarea
