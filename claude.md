@@ -225,6 +225,7 @@ change stays just as cheap again.
 - supabase/migrations/016_add_keyword_search.sql → Adds `'keyword_search'` as a third allowed value on doc_contacts.source (alongside 'scraped'/'manual'), plus `matched_keyword`, `source_post_url`, `source_post_excerpt`, `source_post_date` columns — supports the Keyword Search page/feature (see doc_search_keyword_leads).
 - supabase/migrations/017_add_email_verifications.sql → Creates `doc_email_verifications`, an infra table (like doc_rate_limits) with no org_id and no RLS policies — only ever touched by the service_role client inside doc_register/doc_verify_email/doc_resend_code. Supports public registration with emailed 6-digit codes.
 - supabase/migrations/018_reassert_doc_organizations_rls.sql → Idempotently drops every policy name `doc_organizations` has ever had across this repo's history and recreates the canonical four (`..._select_own`/`..._insert_own`/`..._update_own`/`..._delete_own`, all `user_id = auth.uid()`). Fixes "new row violates row-level security policy for table doc_organizations" on creating a new workspace — production's live policies had drifted from what migrations 001/002 describe (likely from earlier manual SQL Editor activity on this table — see migration 012's own note about duplicate `doc_organizations` rows from that same history).
+- supabase/migrations/019_post_comments_and_replies.sql → Adds `doc_post_comments` (every comment harvested off a scraped post — commenter name/headline/profile URL, the comment text itself, whether they matched the healthcare-keyword filter — kept for everyone who commented, not just doctor matches) and four columns on `doc_comments` (`parent_comment_id`, `reply_to_name`, `reply_to_linkedin_url`, `reply_to_text`) so a generated comment can be a reply to one of them. Also backfills `doc_dm_leads.linkedin_profile_url` from `links` where `links` is clearly a LinkedIn profile URL. Originally written and pushed to GitHub as migration 014 in a separate line of work that this repo's local history (multi-workspace support, invited status, keyword search, email verification, migrations 014-018 by number) never received — reconciled by renumbering to 019 when the two histories were merged; no schema content changed from the original, only the filename/number.
 
 ### Deployment
 - docs/deployment/MANUAL_SQL_OPERATIONS.md  → Manual SQL that must be run
@@ -235,11 +236,12 @@ change stays just as cheap again.
 - supabase/functions/doc_approve_comment/index.ts → Approves comment, triggers Make webhook to post
 - supabase/functions/doc_process_tone/index.ts    → Processes media via Whisper, updates org system prompt (this summary is reference-only now — see doc_generate_comment/doc_generate_dm below, neither reads it anymore)
 - supabase/functions/doc_daily_followups/index.ts → Documented but not yet built — no directory exists in the repo. Skip when deploying; there's nothing to deploy yet.
-- supabase/functions/doc_scrape_post_commenters/index.ts → Lead scraper: pulls LinkedIn post commenters via Apify (HarvestAPI actor), filters for healthcare keywords, upserts doc_contacts
+- supabase/functions/doc_scrape_post_commenters/index.ts → Lead scraper: pulls LinkedIn post commenters via Apify (HarvestAPI actor), filters for healthcare keywords, upserts doc_contacts. Also saves every harvested comment (not just doctor matches) into `doc_post_comments` via `_shared/linkedin.ts`'s `normalizePostUrl()` — reusing the post's existing `doc_posts` row where one exists — so the Comment Generator's Reply tab has something to reply to. Reads the comment text/id/URL through a list of candidate field names (`readCommentText`/`readCommentUrl`/`commentIdentity`) since HarvestAPI's field names for these have changed before without warning; logs a warning if every harvested comment comes back with no text (a sign the actor's schema changed again, not that the post genuinely has empty comments).
 - supabase/functions/doc_search_keyword_leads/index.ts → Keyword/topic lead finder: searches LinkedIn posts by keyword via Apify (HarvestAPI `linkedin-post-search` actor, past week, max 50 posts/search), filters authors for healthcare keywords (same list as doc_scrape_post_commenters, duplicated not shared), and returns a preview list — does NOT write to the database. The frontend (KeywordSearch.tsx) lets the user pick which results to save, then inserts those directly into doc_contacts with `source: 'keyword_search'` (same "insert straight from the client" pattern as AddContactDialog, not a second edge function)
 - supabase/functions/doc_enrich_emails/index.ts → Attempts to find emails for existing doc_contacts via a second Apify actor (HarvestAPI profile+email search) — partial coverage only, not guaranteed per lead
 - supabase/functions/doc_enrich_emails_apollo/index.ts → Second-attempt email finder via Apollo.io People Enrichment API — deliberately separate button/cap (max 20) from doc_enrich_emails since Apollo credits are much scarcer
-- supabase/functions/doc_generate_comment/index.ts → Drafts the AI comment for a post (used by doc_inbound_post and manual regeneration from the Comments dashboard); tone is the permanent, hardcoded Atiba persona from `_shared/atiba-persona.ts` — no longer reads doc_organizations.ai_system_prompt
+- supabase/functions/doc_generate_comment/index.ts → Drafts the AI comment for a post (used by doc_inbound_post and manual regeneration from the Comments dashboard) or a reply to one of that post's harvested comments; tone is the permanent, hardcoded Atiba persona from `_shared/atiba-persona.ts` — no longer reads doc_organizations.ai_system_prompt. `ATIBA_PERSPECTIVE_OVERRIDE` is appended after the reply-specific instructions too (not just the base persona), since those instructions also talk about "your own perspective" and needed the same no-job-title guard. A reply can point at a saved `doc_post_comments` row (`reply_to_comment_id` — brings its post and commenter along) or be typed in by hand (`reply_to_name`/`reply_to_text`/etc., for a post that was never scraped); either way it also looks up a matching `doc_dm_leads` row (by `lead_id`, or by matching profile URL) to fold in bio/links/custom fields. Saved status is `pending` (or `approved` immediately if the org has `auto_post_enabled`) — the Comment Generator's Copy button is what calls `doc_approve_comment` to move a pending draft to approved and save whatever the person edited before copying it, see CommentGenerator.tsx's `OutputArea`.
+- supabase/functions/_shared/linkedin.ts → `normalizePostUrl()` — one canonical spelling for a LinkedIn post URL (lowercases the host, strips query string/fragment/trailing slash, leaves the case-sensitive path alone) so a post opened from a feed link and the same post opened from a share link land in the same `doc_posts` row instead of tripping the `(org_id, linkedin_post_url)` unique constraint into creating two. Used by both doc_scrape_post_commenters and doc_generate_comment.
 - supabase/functions/doc_generate_dm/index.ts → Drafts DM replies/openers for DM Assistant and Outreach's personalized mode; tone is the same permanent, hardcoded Atiba persona from `_shared/atiba-persona.ts` — no longer reads doc_organizations.ai_system_prompt
 - supabase/functions/_shared/atiba-persona.ts → Shared, hardcoded Atiba de Souza voice (`ATIBA_PERSONA`, `ATIBA_HUMAN_STYLE_GUIDE`, `ATIBA_PERSPECTIVE_OVERRIDE`) used by both doc_generate_comment and doc_generate_dm — the one permanent tone for every account, replacing the earlier per-account `doc_organizations.ai_system_prompt` approach. See its header comment for why (per-account tone-sample text kept resurfacing unwanted "as a business owner" framing that a trailing override couldn't fully suppress; Reina then asked for the voice to be locked/permanent across the whole app).
 - supabase/functions/doc_register/index.ts → Public sign-up: creates an unconfirmed auth user (admin API), generates a 6-digit code, stores it in doc_email_verifications, emails it via Brevo. No requireAuth() — see Rule 1's exception list.
@@ -248,7 +250,7 @@ change stays just as cheap again.
 - supabase/functions/_shared/brevo.ts → Shared Brevo transactional-email helper (`sendEmail()`), used only by doc_register/doc_resend_code. Returns true/false rather than throwing — same "don't conflate two outcomes" pattern as the file-processing rule (Rule 19).
 
 ### Frontend
-- src/pages/CommentGenerator.tsx → "Comments" page (route `/`). Drafts a LinkedIn comment from a pasted caption or an uploaded screenshot, plus a history of recent comments. If you fill in Author Name + LinkedIn URL, that person is saved into `doc_dm_leads` (Engaged Leads) with `status = 'engaged'` on generation (commenting on their post counts as engaging with them) — skipped if a lead with that LinkedIn URL already exists.
+- src/pages/CommentGenerator.tsx → "Comments" page (route `/`). Three tabs: Caption and Image draft a comment on a post (pasted text or an uploaded screenshot); Reply to a comment drafts a reply inside the thread instead — pick a post you've scraped and one of its harvested comments (`doc_post_comments`, searchable by name/headline/what they said), or paste a comment in by hand for a post never scraped. If you fill in Author/commenter Name + LinkedIn URL, that person is saved into `doc_dm_leads` (Engaged Leads) with `status = 'engaged'` on generation (commenting on — or replying to — their post/comment counts as engaging with them; `saveEngagedLead()` writes the URL to both `links` and `linkedin_profile_url` so later lookups by either column find them) — skipped if a lead with that LinkedIn URL already exists. The Copy button in the output area is what actually approves a draft (`doc_approve_comment`, saving whatever was edited before copying) — see doc_generate_comment's notes below. Recent Comments never deletes anything — no auto-expiry, no per-item delete button — it's meant as a permanent tracker of everything ever drafted (see Rule/decision history in doc_generate_comment).
 - src/pages/Contacts.tsx      → "Scraped Leads" page. CRM pipeline of doctors identified via the scraper only (`source = 'scraped'`). Manually added leads live on the Manual Added Leads page instead, though both read/write the same doc_contacts table and `["contacts", orgId]` query key. Select leads without an email (max 50) to run doc_enrich_emails, or (max 20) to run doc_enrich_emails_apollo as a second attempt; export filtered view to CSV
 - src/pages/ManualLeads.tsx   → "Manual Added Leads" page. Shows doc_contacts rows where `source = 'manual'` — added one-by-one via AddContactDialog, or via CSV/Excel upload (`UploadLeadsDialog`, defined in this file). Both let you set a freeform `tag` (e.g. "YouTube") on the lead(s); the page's filter chips are built dynamically from whatever distinct `tag` values currently exist — no fixed list. Supports status changes, delete, and the same email-enrichment (Find Emails) flow as Scraped Leads. Shares the `["contacts", orgId]` query key so status stays in sync with Scraped Leads and Outreach.
 - src/pages/auth/Register.tsx → Public "Create your account" page (name/email/password/confirm). Calls doc_register, then routes to /verify carrying `{ email, password }` via router state (never persisted) so Verify can auto-sign-in once the code is confirmed.
@@ -363,12 +365,43 @@ Indexes: doc_posts_user_id_idx, doc_posts_org_id_idx
 | edited_content | text | |
 | status | text | not null, default 'pending', check in ('pending', 'approved', 'rejected', 'generation_failed') |
 | approved_by | uuid | FK → auth.users |
+| parent_comment_id | uuid | FK → doc_post_comments, on delete set null — set only when this draft is a reply to a harvested comment rather than a comment on the post itself. Added in migration 019. |
+| reply_to_name | text | copy of who this is a reply to, added in migration 019 — kept independent of parent_comment_id so the reply still reads sensibly in history if that row is deleted or the post is re-scraped |
+| reply_to_linkedin_url | text | added in migration 019 |
+| reply_to_text | text | copy of what they said, added in migration 019 — same "keep it readable in history" reasoning as reply_to_name |
 | created_at | timestamptz | not null, default now() |
 | updated_at | timestamptz | not null, default now(), auto-trigger |
 
 Policies: doc_comments_select_org, doc_comments_insert_org, doc_comments_update_org, doc_comments_delete_org (all scoped to your own account via doc_user_org_ids())
-Indexes: doc_comments_user_id_idx, doc_comments_post_id_idx, doc_comments_org_id_idx, doc_comments_status_idx, doc_comments_org_status_idx
+Indexes: doc_comments_user_id_idx, doc_comments_post_id_idx, doc_comments_org_id_idx, doc_comments_status_idx, doc_comments_org_status_idx, doc_comments_parent_comment_idx
 Realtime: Enabled ONLY for `status` column
+
+### doc_post_comments
+Every comment harvested off a scraped post by doc_scrape_post_commenters — kept for everyone who
+commented, not just people who matched the healthcare-keyword doctor filter, because replying to a
+comment (see doc_generate_comment's reply mode) means answering what it actually said. Added in
+migration 019.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | uuid | PK, default gen_random_uuid() |
+| user_id | uuid | FK → auth.users, not null, default auth.uid() |
+| org_id | uuid | FK → doc_organizations, not null |
+| post_id | uuid | FK → doc_posts, not null, on delete cascade |
+| linkedin_comment_id | text | not null — LinkedIn's own id where HarvestAPI gives one; otherwise a stable substitute built from the commenter's profile URL + the opening of what they wrote, so re-scraping updates rows instead of duplicating them |
+| linkedin_comment_url | text | |
+| commenter_name | text | not null |
+| commenter_headline | text | |
+| commenter_linkedin_url | text | |
+| comment_text | text | |
+| is_doctor_lead | boolean | not null, default false — whether this commenter matched the same healthcare-keyword filter doc_scrape_post_commenters already applies, stored so the reply screen can put likely doctors first without re-running the match client-side |
+| commented_at | timestamptz | |
+| created_at | timestamptz | not null, default now() |
+| updated_at | timestamptz | not null, default now(), auto-trigger |
+
+Constraint: `doc_post_comments_post_comment_unique` — unique on (post_id, linkedin_comment_id)
+Policies: doc_post_comments_select_org, doc_post_comments_insert_org, doc_post_comments_update_org, doc_post_comments_delete_org (all scoped to your own account via doc_user_org_ids())
+Indexes: doc_post_comments_org_id_idx, doc_post_comments_post_id_idx, doc_post_comments_org_created_idx, doc_post_comments_commenter_url_idx
 
 ### doc_contacts
 "Scraped Leads" page. Also holds one-by-one manually added leads (`source = 'manual'`) and rows
@@ -593,7 +626,7 @@ new query key for the same underlying table.
   ```
 - Success response (200):
   ```json
-  { "data": { "total_items": number, "total_engagers": number, "doctors_found": number, "contacts_saved": number, "run_url": "string", "warning": "string | null" } }
+  { "data": { "total_items": number, "total_engagers": number, "total_comments": number, "comments_saved": number, "post_id": "uuid | null", "doctors_found": number, "contacts_saved": number, "run_url": "string", "warning": "string | null" } }
   ```
 - Error responses:
   - 400: Invalid input
@@ -601,14 +634,24 @@ new query key for the same underlying table.
   - 429: Rate limit exceeded
   - 500: Sanitized message (e.g. Apify key not configured, Apify run failed)
   - 504: Scraping timed out (120s poll budget)
-- Tables touched: doc_contacts (WRITE)
+- Tables touched: doc_contacts (WRITE), doc_posts (READ/WRITE), doc_post_comments (WRITE)
 - External calls: Apify (`harvestapi~linkedin-post-comments` actor) — see Section 6.5
 - Notes: Starts an Apify actor run, polls up to 120s for completion, fetches the resulting dataset,
   filters commenters against a healthcare-keyword list, and upserts matches into `doc_contacts`
   (`onConflict: org_id,linkedin_profile_url`, `ignoreDuplicates: true`) so re-scraping the same
   post is safe. Because this actor scrapes without LinkedIn login, LinkedIn can soft-block it and
   return a "successful" run with 0 items — the response includes `run_url` and a `warning` string
-  so this is visible in the UI instead of silently returning zero saved leads.
+  so this is visible in the UI instead of silently returning zero saved leads. Also saves every
+  harvested comment (not just doctor matches) into `doc_post_comments`, reusing the post's existing
+  `doc_posts` row where one exists (matched via `normalizePostUrl()` from `_shared/linkedin.ts`, so a
+  feed-link URL and a share-link URL for the same post land on the same row) — upserted on
+  `(post_id, linkedin_comment_id)` in chunks of 200 so one long comment thread doesn't send a single
+  oversized insert. These are what power the Comment Generator's Reply tab (see doc_generate_comment).
+  The comment id/text/URL are each read through a short list of candidate field names
+  (`readCommentId`/`readCommentText`/`readCommentUrl`) since HarvestAPI has renamed these before
+  without warning — a run where every harvested comment comes back with no text logs a warning
+  rather than silently storing blanks, since that shape means the actor's schema changed again, not
+  that the post genuinely has empty comments.
 
 ### doc_search_keyword_leads
 - Method: POST

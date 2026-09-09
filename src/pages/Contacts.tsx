@@ -495,6 +495,9 @@ function ScrapeDialog({ orgId }: { orgId: string }) {
         data: {
           total_items: number;
           total_engagers: number;
+          total_comments: number;
+          comments_saved: number;
+          post_id: string | null;
           doctors_found: number;
           contacts_saved: number;
           run_url?: string;
@@ -506,7 +509,7 @@ function ScrapeDialog({ orgId }: { orgId: string }) {
       });
     },
     onSuccess: (result) => {
-      const { total_items, total_engagers, doctors_found, contacts_saved, run_url, warning } = result.data;
+      const { total_items, total_engagers, comments_saved, doctors_found, contacts_saved, run_url, warning } = result.data;
       if (total_items === 0 && warning) {
         toast.warning(warning, {
           duration: 15000,
@@ -515,7 +518,10 @@ function ScrapeDialog({ orgId }: { orgId: string }) {
             : undefined,
         });
       } else {
-        toast.success(`${total_items} items from Apify → ${total_engagers} unique engagers → ${doctors_found} doctors → ${contacts_saved} saved`);
+        toast.success(
+          `${total_items} items from Apify → ${total_engagers} unique engagers → ${doctors_found} doctors → ${contacts_saved} saved. ` +
+            `${comments_saved} comments kept — reply to them from the Comment Generator.`
+        );
       }
       setOpen(false);
       setPostUrl("");
@@ -548,7 +554,9 @@ function ScrapeDialog({ orgId }: { orgId: string }) {
               type="url"
             />
             <p className="text-xs text-muted-foreground">
-              Paste the URL of a LinkedIn post to find doctors who commented on it
+              Paste the URL of a LinkedIn post to find doctors who commented on
+              it. What every commenter actually said is saved too, so you can
+              reply to them from the Comment Generator.
             </p>
           </div>
           <Button

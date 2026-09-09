@@ -3,13 +3,17 @@
 SQL operations that must be run manually in the Supabase SQL Editor per environment
 before deploying. Check each item after running it.
 
-## Right now (pending as of 2026-09-07, updated)
+## Right now (pending as of 2026-09-09, updated)
 
 - [ ] **Migration 018** — re-asserts `doc_organizations`' four RLS policies directly (idempotent —
   drops every policy name this table has ever had, then recreates the canonical four). Fixes
   "new row violates row-level security policy for table doc_organizations" when creating a new
   workspace from the header switcher. See its section below — **run this one first**, it's a
   one-minute paste-and-run with no dependencies.
+- [ ] **Migration 019** — adds `doc_post_comments` (every comment harvested off a scraped post) and
+  four reply-tracking columns on `doc_comments`. This is what the Comment Generator's new "Reply to
+  a comment" tab needs — without it, scraping a post will fail to save comments and replying will
+  error with "relation doc_post_comments does not exist." See its section below.
 
 Migrations 010–016 should already be applied (tags, custom fields, account isolation, Invited
 status, and Keyword Search). Two more things are pending, for the new public registration feature:
@@ -397,6 +401,111 @@ You should see exactly 4 rows: `doc_organizations_select_own` (SELECT), `doc_org
 (INSERT), `doc_organizations_update_own` (UPDATE), `doc_organizations_delete_own` (DELETE) — no
 other doc_organizations policy names. Then try creating a new workspace from the header switcher
 again; it should succeed instead of showing the RLS error.
+
+### Migration 019 — paste this into the SQL Editor (no dependency on other pending migrations)
+
+```sql
+begin;
+
+create table if not exists public.doc_post_comments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  org_id uuid not null references public.doc_organizations(id) on delete cascade,
+  post_id uuid not null references public.doc_posts(id) on delete cascade,
+  linkedin_comment_id text not null,
+  linkedin_comment_url text,
+  commenter_name text not null,
+  commenter_headline text,
+  commenter_linkedin_url text,
+  comment_text text,
+  is_doctor_lead boolean not null default false,
+  commented_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint doc_post_comments_post_comment_unique
+    unique (post_id, linkedin_comment_id)
+);
+
+alter table public.doc_post_comments enable row level security;
+
+create policy "doc_post_comments_select_org"
+  on public.doc_post_comments for select
+  using (org_id in (select public.doc_user_org_ids()));
+
+create policy "doc_post_comments_insert_org"
+  on public.doc_post_comments for insert
+  with check (
+    user_id = auth.uid()
+    and org_id in (select public.doc_user_org_ids())
+  );
+
+create policy "doc_post_comments_update_org"
+  on public.doc_post_comments for update
+  using (org_id in (select public.doc_user_org_ids()))
+  with check (org_id in (select public.doc_user_org_ids()));
+
+create policy "doc_post_comments_delete_org"
+  on public.doc_post_comments for delete
+  using (org_id in (select public.doc_user_org_ids()));
+
+create index if not exists doc_post_comments_org_id_idx
+  on public.doc_post_comments(org_id);
+create index if not exists doc_post_comments_post_id_idx
+  on public.doc_post_comments(post_id);
+create index if not exists doc_post_comments_org_created_idx
+  on public.doc_post_comments(org_id, created_at desc);
+create index if not exists doc_post_comments_commenter_url_idx
+  on public.doc_post_comments(commenter_linkedin_url);
+
+create trigger doc_post_comments_updated_at
+  before update on public.doc_post_comments
+  for each row execute function public.doc_handle_updated_at();
+
+revoke all on public.doc_post_comments from anon, authenticated;
+grant select, insert, update, delete on public.doc_post_comments to authenticated;
+
+alter table public.doc_comments
+  add column if not exists parent_comment_id uuid
+    references public.doc_post_comments(id) on delete set null;
+
+alter table public.doc_comments
+  add column if not exists reply_to_name text;
+
+alter table public.doc_comments
+  add column if not exists reply_to_linkedin_url text;
+
+alter table public.doc_comments
+  add column if not exists reply_to_text text;
+
+create index if not exists doc_comments_parent_comment_idx
+  on public.doc_comments(parent_comment_id);
+
+update public.doc_dm_leads
+set linkedin_profile_url = trim(links)
+where linkedin_profile_url is null
+  and links is not null
+  and trim(links) ~* '^https?://([a-z]{2,3}\.)?linkedin\.com/in/';
+
+create index if not exists doc_dm_leads_linkedin_url_idx
+  on public.doc_dm_leads(linkedin_profile_url);
+
+commit;
+```
+
+Verify with:
+```sql
+select table_name from information_schema.tables
+where table_name = 'doc_post_comments';
+
+select column_name from information_schema.columns
+where table_name = 'doc_comments'
+  and column_name in ('parent_comment_id', 'reply_to_name', 'reply_to_linkedin_url', 'reply_to_text');
+
+select rowsecurity from pg_tables where tablename = 'doc_post_comments';
+```
+The first should return one row; the second should return all four column names; the third should
+show `rowsecurity = true`. Then try scraping a post from the Scraped Leads page and confirm the
+Comment Generator's "Reply to a comment" tab lists that post with its comments.
 
 ## Deploy edge functions
 
