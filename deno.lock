@@ -49,7 +49,8 @@
     "https://esm.sh/@supabase/supabase-js@2.103.3/denonext/supabase-js.mjs": "845c8b56bcda848f8a84aaba8dff7e5115d3c81342821474701704c39f8b7ead",
     "https://esm.sh/iceberg-js@0.8.1/denonext/iceberg-js.mjs": "d839d81a2e3966500ca2cdd0c1cb458e9608bacfc91f7bb67a69b2e878dcdb4f",
     "https://esm.sh/iceberg-js@0.8.1?target=denonext": "58c849d7fe2bf4eca4a84eb501e83c161a7d8c34ca1bec15a962b3bec3062633",
-    "https://esm.sh/tslib@2.8.1/denonext/tslib.mjs": "c38da5dd6da6281964435002ce204cd586634fe3bdfb24a0ee116f48cf3292e9"
+    "https://esm.sh/tslib@2.8.1/denonext/tslib.mjs": "c38da5dd6da6281964435002ce204cd586634fe3bdfb24a0ee116f48cf3292e9",
+    "https://esm.sh/zod@3.23.8": "15e60c792ac21d4818f181671c7c74bf33bf7526d487dc524911e42785d8b5c2"
   },
   "workspace": {
     "packageJson": {
@@ -61,6 +62,7 @@
         "npm:@tailwindcss/vite@^4.2.2",
         "npm:@tanstack/react-query@^5.99.0",
         "npm:@types/node@^24.12.2",
+        "npm:@types/papaparse@^5.5.2",
         "npm:@types/react-dom@^19.2.3",
         "npm:@types/react@^19.2.14",
         "npm:@vitejs/plugin-react@^6.0.1",
@@ -72,6 +74,7 @@
         "npm:globals@^17.4.0",
         "npm:lucide-react@^1.8.0",
         "npm:next-themes@~0.4.6",
+        "npm:papaparse@^5.5.4",
         "npm:react-dom@^19.2.4",
         "npm:react-router-dom@^7.14.1",
         "npm:react@^19.2.4",
@@ -83,6 +86,7 @@
         "npm:typescript-eslint@^8.58.0",
         "npm:typescript@~6.0.2",
         "npm:vite@^8.0.4",
+        "npm:xlsx@~0.18.5",
         "npm:zod@^4.3.6"
       ]
     }

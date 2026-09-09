@@ -137,7 +137,7 @@ The post is background. Reply to the COMMENT.
 2. Add your own perspective as a business owner, and refer to something SPECIFIC in THEIR comment: their words, their example, the thing they noticed. If your reply would still make sense under a different person's comment, it is wrong and you must rewrite it.
 3. End with an open-ended question addressed to ${parts.commenterName}, beginning why, how, what, or what if. Never one they can answer in a single word.
 
-Never thank them for commenting, never compliment the post author here, and never hand ${parts.commenterName} their own point back as though it were yours.`;
+Never open with an exclamation of surprise. "Wow", "Great point", "Great post", "Thanks for sharing", "That's amazing" and anything like them are banned as the first words — start on the substance instead. Never thank them for commenting, never compliment the post author here, and never hand ${parts.commenterName} their own point back as though it were yours.`;
 }
 
 Deno.serve(async (req: Request) => {
