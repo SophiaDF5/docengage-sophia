@@ -39,8 +39,44 @@ export interface Comment {
   status: CommentStatus;
   approved_by: string | null;
   source: CommentSource;
+  // Set only when this draft is a reply to someone's comment rather than a
+  // comment on the post. parent_comment_id points at the harvested comment
+  // and goes null if that row is removed; the reply_to_* copy is what keeps
+  // the reply readable in the history when it does — see migration 014.
+  parent_comment_id: string | null;
+  reply_to_name: string | null;
+  reply_to_linkedin_url: string | null;
+  reply_to_text: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * A comment somebody else left on a post, harvested by the scraper.
+ *
+ * The scraper used to read these, decide whether the commenter looked like a
+ * doctor, and throw the words away. They are kept now because replying to a
+ * comment means answering what it actually said.
+ */
+export interface PostComment {
+  id: string;
+  user_id: string;
+  org_id: string;
+  post_id: string;
+  linkedin_comment_id: string;
+  linkedin_comment_url: string | null;
+  commenter_name: string;
+  commenter_headline: string | null;
+  commenter_linkedin_url: string | null;
+  comment_text: string | null;
+  is_doctor_lead: boolean;
+  commented_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PostCommentWithPost extends PostComment {
+  doc_posts: Pick<Post, "id" | "linkedin_post_url" | "author_name" | "content">;
 }
 
 export interface CommentWithPost extends Comment {
