@@ -13,7 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { Badge } from "../components/ui/badge";
 import { Skeleton } from "../components/ui/skeleton";
 import { Copy, RefreshCw, Upload, Loader2, MessageSquare, Search } from "lucide-react";
-import type { CommentWithPost, Post, PostComment } from "../types/database";
+import type { CommentWithPost, Post, PostComment, Contact } from "../types/database";
 
 interface GenerateResult {
   data: {
@@ -96,6 +96,7 @@ export function CommentGenerator() {
           <TabsTrigger value="caption">Caption</TabsTrigger>
           <TabsTrigger value="image">Image</TabsTrigger>
           <TabsTrigger value="reply">Reply to a comment</TabsTrigger>
+          <TabsTrigger value="keyword">Keyword Search Posts</TabsTrigger>
         </TabsList>
 
         <TabsContent value="caption" className="mt-4">
@@ -106,6 +107,9 @@ export function CommentGenerator() {
         </TabsContent>
         <TabsContent value="reply" className="mt-4">
           <ReplyMode orgId={currentOrgId} />
+        </TabsContent>
+        <TabsContent value="keyword" className="mt-4">
+          <KeywordSearchPostsMode orgId={currentOrgId} />
         </TabsContent>
       </Tabs>
 
@@ -430,6 +434,197 @@ function ImageMode({ orgId }: { orgId: string }) {
           if (fileInputRef.current) fileInputRef.current.click();
         }}
       />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Keyword Search Posts                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Draft a comment for a post that surfaced through Keyword Search, without
+ * retyping anything the search already captured.
+ *
+ * Keyword Search saves the author's name/profile URL, the post URL, and a
+ * 500-character excerpt of the post directly onto the doc_contacts row it
+ * creates (source='keyword_search' — see migration 016) — this just reads
+ * that back and feeds it into the same caption-generation call CaptionMode
+ * uses. No new table or edge function needed.
+ *
+ * The person is already a saved lead by the time they show up here, so a
+ * generated draft bumps their existing doc_contacts row to 'engaged'
+ * instead of creating a second record the way the other tabs' Engaged
+ * Leads save does — one person should only ever have one row.
+ */
+function KeywordSearchPostsMode({ orgId }: { orgId: string }) {
+  const [selectedId, setSelectedId] = useState("");
+  const [postText, setPostText] = useState("");
+  const queryClient = useQueryClient();
+
+  // A distinct key (not the bare ["contacts", orgId] every other lead page
+  // uses) so this server-filtered query can't clobber their full-list cache
+  // — but still a prefix of it, so their invalidateQueries(["contacts",
+  // orgId]) calls after a status change refresh this list too.
+  const leadsQuery = useQuery({
+    queryKey: ["contacts", orgId, "keyword_search"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doc_contacts")
+        .select(
+          "id, user_id, org_id, linkedin_profile_url, full_name, headline, email, is_connected, status, source, custom_fields, tag, matched_keyword, source_post_url, source_post_excerpt, source_post_date, last_contacted_at, created_at, updated_at"
+        )
+        .eq("org_id", orgId)
+        .eq("source", "keyword_search")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data as Contact[];
+    },
+  });
+
+  const leads = leadsQuery.data ?? [];
+  const selected = leads.find((l) => l.id === selectedId) ?? null;
+
+  const selectLead = (lead: Contact) => {
+    setSelectedId(lead.id);
+    setPostText(lead.source_post_excerpt ?? "");
+  };
+
+  // Generating for someone already means engaging with them — 'engaged' is
+  // the last stage of the pipeline (pending -> invited -> messaged ->
+  // engaged), so this never downgrades anyone.
+  const markEngaged = async (contactId: string) => {
+    const { error } = await supabase
+      .from("doc_contacts")
+      .update({ status: "engaged" })
+      .eq("id", contactId);
+    if (!error) queryClient.invalidateQueries({ queryKey: ["contacts", orgId] });
+  };
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!selected) throw new Error("Select a post first");
+      return callEdgeFunction<GenerateResult>("doc_generate_comment", {
+        org_id: orgId,
+        mode: "caption",
+        content: postText.trim(),
+        author_name: selected.full_name,
+        author_linkedin_url: selected.linkedin_profile_url || undefined,
+        linkedin_post_url: selected.source_post_url || undefined,
+      });
+    },
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ["comment-history", orgId] });
+      if (selected) await markEngaged(selected.id);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Generation failed");
+    },
+  });
+
+  if (leadsQuery.isLoading) {
+    return <Skeleton className="h-24 w-full" />;
+  }
+
+  if (leads.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No saved Keyword Search leads yet. Search a topic and save some leads
+        from the Keyword Search page first — they'll show up here to draft
+        comments for.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <Label>Which saved post?</Label>
+        <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+          {leads.map((lead) => (
+            <button
+              key={lead.id}
+              type="button"
+              onClick={() => selectLead(lead)}
+              className={`w-full text-left rounded-md border p-3 transition-colors ${
+                selectedId === lead.id
+                  ? "border-foreground bg-accent"
+                  : "hover:bg-accent/50"
+              }`}
+            >
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium">{lead.full_name}</span>
+                {lead.matched_keyword && (
+                  <Badge variant="outline">{lead.matched_keyword}</Badge>
+                )}
+                {lead.status === "engaged" && (
+                  <Badge variant="secondary">engaged</Badge>
+                )}
+              </div>
+              {lead.headline && (
+                <p className="text-xs text-muted-foreground line-clamp-1">
+                  {lead.headline}
+                </p>
+              )}
+              <p className="text-sm mt-1 line-clamp-2">
+                {lead.source_post_excerpt ?? (
+                  <span className="text-muted-foreground italic">
+                    No post text saved for this lead.
+                  </span>
+                )}
+              </p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {selected && (
+        <>
+          <div className="space-y-2">
+            <Label>Post text</Label>
+            <Textarea
+              value={postText}
+              onChange={(e) => setPostText(e.target.value)}
+              placeholder="Paste the post text..."
+              rows={5}
+            />
+            <p className="text-xs text-muted-foreground">
+              Keyword Search only saves the first 500 characters of the post —
+              paste in the rest here if you have it, for a better draft.
+              {selected.source_post_url && (
+                <>
+                  {" "}
+                  <a
+                    href={selected.source_post_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline"
+                  >
+                    View the original post
+                  </a>
+                  .
+                </>
+              )}
+            </p>
+          </div>
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={!postText.trim() || mutation.isPending}
+          >
+            {mutation.isPending ? (
+              <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Generating...</>
+            ) : (
+              "Generate Comment"
+            )}
+          </Button>
+          <OutputArea
+            content={mutation.data?.data?.generated_content ?? null}
+            commentId={mutation.data?.data?.comment_id ?? null}
+            isLoading={mutation.isPending}
+            onRegenerate={() => mutation.mutate()}
+          />
+        </>
+      )}
     </div>
   );
 }
